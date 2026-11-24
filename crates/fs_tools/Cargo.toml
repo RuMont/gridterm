@@ -1,0 +1,27 @@
+[package]
+name = "fs_tools"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+ignore.workspace = true
+nucleo.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
+notify.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+anyhow.workspace = true
+log.workspace = true
+# Already in the lockfile via nucleo-matcher; used to map grapheme indices to char indices.
+unicode-segmentation = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+parking_lot.workspace = true
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "index"
+harness = false

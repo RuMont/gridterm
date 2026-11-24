@@ -1,0 +1,141 @@
+# gridterm
+
+Gestor de terminales nativo para macOS, escrito en Rust con GPUI (el framework de Zed) y `alacritty_terminal`.
+
+Las terminales se colocan en un grid que se expande dentro de la ventana: primero en horizontal y después en vertical. Tres herramientas laterales siguen a la **terminal activa**, la que tiene el foco:
+
+- **Git**: staging, commit, deshacer el último commit local, revertir un commit ya subido (con push), push y pull. El History es un git graph compacto de todas las ramas locales y remotas y los tags (líneas de 1 px, carriles de 8 px, hasta 24 carriles visibles): punto relleno = commit pusheado, punto hueco = solo local, anillo exterior = HEAD; chips con las ramas y tags de cada commit (la rama actual resaltada). Revertir solo se ofrece en commits pusheados de la historia de HEAD.
+- **Explorer**: árbol de carpetas y archivos, y búsqueda por contenido. Los archivos se abren en un visor de solo lectura con resaltado de sintaxis, como pestañas de la terminal activa.
+- **File Search** (⌘P): búsqueda fuzzy por nombre, en una paleta flotante (también disponible como panel del sidebar).
+
+## Ejecutar
+
+```sh
+source ~/.cargo/env
+cargo run --release            # binario en target/release/gridterm
+scripts/bundle.sh              # target/release/bundle/gridterm.app
+```
+
+Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, terminal activa y ancho del sidebar) en `~/.config/gridterm/session.toml`, y se restaura al abrir. La primera vez (sin sesión) la app abre el selector de carpetas de macOS para la primera terminal; si lo cancelas, el grid queda vacío con la celda **+**.
+
+## Atajos
+
+| Atajo | Acción |
+|---|---|
+| ⌘T | Nueva terminal (si hay hueco): elige la carpeta en Finder |
+| ⌘W | Cerrar la pestaña de archivo visible; si se ve la terminal, cerrarla (con sus archivos) |
+| ⌘⇧] / ⌘⇧[ | Pestaña siguiente / anterior de la celda activa |
+| Esc (en un archivo) | Volver a la pestaña de la terminal |
+| ⌘1…⌘9 | Enfocar la terminal N |
+| ⌘⌥←↑→↓ | Mover el foco por el grid |
+| ⌘⇧↩ | Zoom de la terminal activa |
+| ⌘B | Mostrar u ocultar el sidebar |
+| ⇧⌘G / ⇧⌘E / ⌘P / ⇧⌘F | Git / Explorer / buscar archivo / buscar en archivos |
+| ⌘, | Ajustes (grid, fuente, Option como Meta, pull --rebase) |
+| Arrastrar el borde del sidebar | Cambiar su ancho |
+| Arrastrar un separador del grid (doble clic: igualar) | Cambiar el tamaño de celdas y filas |
+| ⌘ + clic sobre una URL o ruta | Abrir la URL; un archivo (`ruta:línea`) se abre como pestaña de esa terminal en esa línea; una carpeta se muestra en el Explorer (también enlaces OSC 8 y URL partidas en varias filas) |
+| Esc (en el sidebar) | Volver a la terminal activa |
+| ⌘C / ⌘V / ⌘K | Copiar selección / pegar / limpiar (en una terminal) |
+| ⇧PgUp / ⇧PgDn, ⌘Home / ⌘End | Scroll del historial |
+
+En la paleta de File Search: ↩ inserta la ruta en la terminal activa, ⇧↩ abre el archivo como pestaña, ⌥↩ hace `cd` a su carpeta, ⌘↩ la muestra en el Explorer, ⌘⇧C copia la ruta y Esc (o un clic fuera) cierra la paleta.
+
+En el Explorer: clic en un archivo = vista previa (pestaña en cursiva que el siguiente clic reemplaza; el foco se queda en el Explorer), doble clic = pestaña fijada. Con teclado: Espacio previsualiza, ↩ abre, ⌥↩ inserta la ruta en la terminal. Clic en una línea de la búsqueda por contenido abre el archivo en esa línea. Las acciones de cada fila son: insertar la ruta, `cd` a la carpeta, copiar la ruta y mostrar en Finder.
+
+## Configuración
+
+El fichero de configuración es `~/.config/gridterm/config.toml`. Todos los campos son opcionales; también se puede guardar desde Ajustes.
+
+```toml
+[grid]
+max_cols = 3
+max_rows = 2
+
+[terminal]
+font_family = "Menlo"
+font_size = 13.0
+option_as_meta = false
+dim_inactive = true
+cursor_blink = true
+
+[git]
+pull_rebase = false
+
+[search]
+max_content_results = 2000   # límite de líneas en la búsqueda por contenido
+
+[ui]
+theme = "dark"               # o "light"
+```
+
+`GRIDTERM_CONFIG_DIR` sustituye a `~/.config/gridterm` (lo usan las pruebas).
+
+## Arquitectura
+
+```
+crates/
+  app/         binario: Workspace (grid + contexto activo), sidebar y paneles (git, explorer, search, settings)
+  terminal/    PTY + alacritty_terminal, TerminalView (render en canvas GPUI), teclas→xterm, cwd vía libproc
+  layout/      algoritmo puro del grid (horizontal primero, la última fila se estira) y navegación
+  git_client/  git2 para lecturas e index; CLI `git` para commit/revert/push/pull (hooks, firma, credenciales)
+  fs_tools/    árbol lazy (`ignore`), índice fuzzy (`nucleo` + watcher), búsqueda de contenido (motor de ripgrep)
+  config/      configuración TOML
+```
+
+**Contexto activo.** Cuando cambia el foco, y cada 500 ms (solo en la terminal activa), se lee el cwd del proceso en primer plano (`tcgetpgrp` + `proc_pidinfo`). La raíz del repo se busca subiendo hasta un `.git`, unos pocos `stat` sin abrir el repositorio. Los paneles solo se recargan si cambia esa raíz. El botón 📌 fija el contexto. Las terminales inactivas actualizan su cabecera solo cuando emiten salida.
+
+**Nuevas terminales y tamaño del grid.** Mientras el grid tenga hueco, la siguiente celda vacía muestra un **+**. Al pulsarlo (o con ⌘T, o con el botón de la barra lateral) se abre el selector de carpetas de macOS y la terminal se abre en la carpeta elegida; cancelar no hace nada. Con el grid lleno no hay **+** y ⌘T solo avisa. Al reducir columnas o filas en Ajustes, si alguna terminal queda fuera (las últimas en orden, porque el grid se rellena en orden) aparece un diálogo de confirmación que las lista, marca en rojo las que tienen procesos en marcha (el trabajo en primer plano, o jobs en segundo plano) y vela sus celdas. Solo al confirmar se cierran (sus procesos mueren) y se aplica el tamaño nuevo; Esc o Cancelar lo dejan todo igual.
+
+**Archivos como pestañas.** Cada celda del grid es una terminal más los archivos abiertos desde ella: el Explorer y la búsqueda muestran la carpeta de la terminal activa, así que un archivo pertenece a la terminal que estaba activa al abrirlo (o a la terminal donde se hizo ⌘-clic). El grid sigue contando solo terminales. Al enfocar un archivo, su terminal pasa a ser la activa y las herramientas no cambian de carpeta. Una terminal oculta tras una pestaña sigue viva pero no se repinta; si emite salida, su pestaña muestra un punto.
+
+**Visor.** Solo lectura (`Editor` de gpui-component): números de línea, selección, copia y ⌘F. El archivo se lee en segundo plano y se recarga si cambia en disco. Binarios (NUL en los primeros 8 KB) y archivos de más de 64 MB muestran un aviso; de los muy largos se muestran las primeras 50.000 líneas / 4 MB con un aviso. El resaltado usa syntect (lenguaje por extensión) con un analizador propio que trabaja siempre fuera del hilo de UI: el de la librería analizaba en línea los archivos de hasta 64 KB y bloqueaba la ventana 75–110 ms (medido).
+
+**Estilo.** Sin esquinas redondeadas en ninguna parte (el tema de componentes usa radio 0). Las notificaciones aparecen arriba a la derecha, sin animación, apiladas una debajo de otra. Las informativas se cierran solas a los 5 s y las de error se quedan hasta pulsar ✕.
+
+**Procesos.**
+- Cada terminal lanza tu shell directamente como shell de login (`$SHELL -l`), sin el envoltorio `/usr/bin/login`. Así, si gridterm muere, la shell termina con su terminal y no quedan procesos huérfanos. A cambio, no aparece el mensaje "Last login".
+- Al cerrar una terminal o salir de la app, las shells (y sus trabajos) reciben SIGHUP. Si en 1 s no han terminado, se les manda SIGKILL.
+- Los procesos auxiliares (`open`) se recogen, así que no quedan zombies.
+
+**Debounce de búsquedas.** Tanto File Search como la búsqueda por contenido muestran resultados 250 ms después de dejar de teclear. En File Search, ↩, ⇧↩, ⌥↩, ↑↓ y ⌘⇧C aplican antes la consulta pendiente; en la búsqueda por contenido, ↩ busca al momento.
+
+**File Search.** El índice solo se construye mientras la búsqueda está visible, de modo que una terminal en `~` no cuesta nada hasta que buscas. Tiene un tope configurable (`[search] max_indexed_files`, 300.000 por defecto) y se actualiza desde la interfaz como mucho cada 50 ms. Los resultados cuyo **nombre de archivo** coincide con la búsqueda van primero (y se resalta el nombre); después, los que solo coinciden por alguna carpeta de su ruta. Así, `event` muestra `ui/event_handler.rs` antes que `events/mod.rs`.
+
+**Watchers.**
+- El panel Git se refresca con un watcher sobre `.git` (`index`, `HEAD`, `refs`) y el árbol de trabajo no ignorado, con debounce y sin sondeo.
+- El Explorer relee las carpetas cargadas que cambian en disco.
+- El índice de File Search se reindexa al crear, borrar o renombrar archivos.
+
+**Git.** Clic en un archivo despliega su diff: cada hunk tiene su botón de Stage/Unstage, y se pueden seleccionar líneas sueltas para aplicar solo esas, como `git add -p` o GitKraken. Push y pull muestran el progreso de git en vivo y se pueden cancelar. Si la rama no tiene upstream, se pide confirmación antes de `push --set-upstream`. Los errores se resumen en un mensaje accionable, por ejemplo: "Push rejected: … Pull first, then push again.".
+
+**Performance.**
+- El fork de la shell se hace fuera del hilo de UI.
+- La salida del PTY se agrupa (como mucho un refresco cada 4 ms).
+- Cada terminal es una vista cacheada: las que están idle no se repintan.
+- Solo se pintan las líneas visibles.
+- Todas las listas están virtualizadas.
+
+## Pruebas
+
+```sh
+cargo test --workspace     # unitarias e integración
+scripts/e2e.sh [out_dir]   # todos los casos del plan → out_dir/RESULTS.md
+```
+
+`scripts/e2e.sh` ejecuta lo siguiente:
+- Compila la app en release con la feature `e2e` y la lanza en un entorno aislado (directorio de configuración temporal y `zsh` sin rc de usuario).
+- Un runner dentro de la app crea un fixture: un repo con remoto bare, un segundo clon, una carpeta sin repo y 1.000 commits de historial.
+- El runner pulsa teclas y ratón de verdad y comprueba el estado. En cada fallo guarda una captura y un volcado (`FAIL-<id>.png/.txt`).
+- Relanza la app para comprobar la restauración de la sesión.
+- Pasa los tests de rendimiento en release (`--ignored`) y comprueba el `.app` y los benchmarks de criterion (`cargo bench -p fs_tools`).
+
+`GRIDTERM_E2E_STOP_AFTER=<id>` detiene el runner tras un caso.
+
+## Limitaciones conocidas / próximos pasos
+
+- **Arranque en frío**: entre 190 y 390 ms hasta el primer frame según la carga de la máquina; el presupuesto es de 300 ms. El código propio de gridterm supone ~6 ms; el resto es AppKit y GPUI. El plan fijaba al principio 200 ms y se amplió tras medir:
+  - Una app GPUI vacía ya tarda 225–268 ms en esta máquina.
+  - Los shaders de Metal se compilan en tiempo de ejecución (`gpui-kit` fuerza `runtime_shaders`), pero macOS los guarda en caché: precompilarlos solo ahorraría 4–11 ms. Únicamente el primer lanzamiento tras instalar o actualizar paga unos 130 ms más de compilación.
+  - El primer lanzamiento de un binario nuevo suma entre 0,7 y 1,2 s por el análisis de seguridad de macOS.
+- **IME**: verificado contra el contrato de `InputHandler` (el que usa macOS para `setMarkedText`/`insertText`). La composición con un teclado e IME reales del sistema no se puede simular en los tests; conviene probarla a mano (´ + e, ñ, japonés).
