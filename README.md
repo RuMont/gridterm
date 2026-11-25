@@ -160,6 +160,20 @@ scripts/e2e.sh [out_dir]   # todos los casos del plan → out_dir/RESULTS.md
 
 `GRIDTERM_E2E_STOP_AFTER=<id>` detiene el runner tras un caso.
 
+## CI y releases
+
+- **CI** (`.github/workflows/ci.yml`): en cada push a `master` y en cada pull request, una máquina macOS de GitHub pasa clippy (normal y con `--features e2e`, sin avisos) y `cargo test --workspace`. La suite e2e no se ejecuta ahí porque necesita pantalla: se sigue lanzando en local con `scripts/e2e.sh`.
+- **Release** (`.github/workflows/release.yml`): se publica subiendo una etiqueta igual a la versión de `Cargo.toml`:
+
+  ```sh
+  # 1. subir version = "X.Y.Z" en Cargo.toml y hacer commit
+  git tag vX.Y.Z
+  git push origin master vX.Y.Z
+  ```
+
+  El workflow comprueba que la etiqueta coincide con la versión, pasa la CI, genera la app con `scripts/package.sh` (que usa `scripts/bundle.sh` y comprime con `ditto`) y crea la release con `gridterm-X.Y.Z-arm64.zip`. Las notas son las instrucciones de instalación de `.github/release-notes.md` y la lista de cambios que genera GitHub.
+- La app se firma **ad-hoc**, así que macOS la bloquea la primera vez que se abre tras descargarla; las notas de la release explican cómo permitirla. Para evitarlo hacen falta un certificado *Developer ID* y la notarización de Apple.
+
 ## Limitaciones conocidas / próximos pasos
 
 - **Arranque en frío**: entre 190 y 390 ms hasta el primer frame según la carga de la máquina; el presupuesto es de 300 ms. El código propio de gridterm supone ~6 ms; el resto es AppKit y GPUI. El plan fijaba al principio 200 ms y se amplió tras medir:

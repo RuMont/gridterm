@@ -1,0 +1,48 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (equal to the version in Cargo.toml) runs the CI and
+# publishes a GitHub release with gridterm.app zipped.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: scripts/package.sh --check "$GITHUB_REF_NAME"
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Build and publish
+    needs: ci
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and package
+        id: package
+        run: echo "zip=$(scripts/package.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: ${{ steps.package.outputs.zip }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            --verify-tag \
+            --title "gridterm ${GITHUB_REF_NAME#v}" \
+            --notes-file .github/release-notes.md \
+            --generate-notes

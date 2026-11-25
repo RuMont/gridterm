@@ -10,6 +10,12 @@ use agents::integration::{shell_env, write_agent_files};
 use agents::socket::{AgentRequest, AgentSocket};
 use serde_json::{json, Value};
 
+/// Temporary directory for a socket. Unix socket paths are limited to 103
+/// bytes and `$TMPDIR` can be long, so it lives in `/tmp` (0700, ours).
+fn socket_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new().prefix("gt").tempdir_in("/tmp").unwrap()
+}
+
 /// Answers every request of `socket` with `answer(method)` on a thread.
 fn serve(socket: &mut AgentSocket, answer: fn(&AgentRequest) -> Value) -> std::thread::JoinHandle<Vec<(Option<i32>, String)>> {
     let mut requests = socket.take_requests().unwrap();
@@ -36,7 +42,7 @@ fn serve(socket: &mut AgentSocket, answer: fn(&AgentRequest) -> Value) -> std::t
 #[test]
 fn socket_reports_the_peer_pid_and_is_private() {
     use std::os::unix::fs::PermissionsExt as _;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = socket_tempdir();
     let path = dir.path().join("s/gridterm.sock");
     let mut socket = AgentSocket::start(&path).unwrap();
     assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
@@ -64,7 +70,7 @@ fn socket_reports_the_peer_pid_and_is_private() {
 
 #[test]
 fn stdio_server_lists_and_calls_tools_through_the_socket() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = socket_tempdir();
     let path = dir.path().join("gridterm.sock");
     let mut socket = AgentSocket::start(&path).unwrap();
     let server = serve(&mut socket, |r| match r.method.as_str() {
