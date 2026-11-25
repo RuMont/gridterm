@@ -284,7 +284,7 @@ impl Workspace {
             let session = ws.session(cx);
             // Process exit skips destructors: end every shell explicitly so
             // none outlives the app.
-            let views = ws.terminals.clone();
+            let views = ws.all_terminals(cx);
             for v in &views {
                 v.read(cx).hang_up();
             }
@@ -458,9 +458,7 @@ impl Workspace {
     /// the asking process (known from the kernel) descends from.
     fn answer_agent(&mut self, request: agents::socket::AgentRequest, cx: &mut Context<Self>) {
         self.agent_requests += 1;
-        let index = request.peer_pid.and_then(|pid| {
-            self.terminals.iter().position(|t| t.read(cx).child_pid().is_some_and(|shell| terminal::cwd::is_descendant(pid, shell)))
-        });
+        let index = request.peer_pid.and_then(|pid| self.cell_of_pid(pid, cx));
         let Some(i) = index else {
             return request.respond(serde_json::json!({ "error": "not running inside a gridterm cell" }));
         };
@@ -513,7 +511,7 @@ impl Workspace {
     /// `workspaceFolders` containing its cwd, e.g. inside tmux).
     fn ide_folders(&self, cx: &App) -> Vec<String> {
         let mut folders: Vec<String> = Vec::new();
-        for t in &self.terminals {
+        for t in &self.all_terminals(cx) {
             if let Some(cwd) = t.read(cx).cwd() {
                 let root = find_repo_root(cwd).unwrap_or_else(|| cwd.clone()).display().to_string();
                 if !folders.contains(&root) {
@@ -536,11 +534,11 @@ impl Workspace {
         match event {
             agents::ide::IdeEvent::Connected { conn, pid } => {
                 // The agent's cell: the terminal whose shell it descends from.
+                // Child terminals share their cell: the connection is bound
+                // to the cell's parent terminal.
                 let Some(pid) = pid else { return };
-                let terminal = self.terminals.iter().map(|t| t.read(cx)).find(|t| {
-                    t.child_pid().is_some_and(|shell| terminal::cwd::is_descendant(pid, shell))
-                });
-                if let Some(id) = terminal.map(|t| t.id()) {
+                if let Some(i) = self.cell_of_pid(pid, cx) {
+                    let id = self.terminals[i].read(cx).id();
                     self.bind_ide_conn(conn, id, cx);
                 }
             }
@@ -548,8 +546,16 @@ impl Workspace {
                 // No token, no self-identification (opencode): ask the system
                 // which process in a cell holds the connection.
                 let Some(server_port) = self.ide.as_ref().map(|i| i.port()) else { return };
-                let shells: Vec<(u64, i32)> =
-                    self.terminals.iter().filter_map(|t| t.read(cx).child_pid().map(|p| (t.read(cx).id(), p))).collect();
+                // (cell's parent id, shell) for every terminal of every cell.
+                let shells: Vec<(u64, i32)> = self
+                    .cells
+                    .iter()
+                    .zip(&self.terminals)
+                    .flat_map(|(c, parent)| {
+                        let id = parent.read(cx).id();
+                        c.read(cx).terminals().filter_map(|t| t.read(cx).child_pid()).map(move |p| (id, p)).collect::<Vec<_>>()
+                    })
+                    .collect();
                 let lookup = cx.background_spawn(async move {
                     let trees: Vec<(u64, Vec<i32>)> =
                         shells.into_iter().map(|(id, shell)| (id, terminal::cwd::descendants(shell))).collect();
@@ -633,8 +639,9 @@ impl Workspace {
         }
     }
 
-    fn active_terminal(&self) -> Option<&Entity<TerminalView>> {
-        self.active.and_then(|i| self.terminals.get(i))
+    /// The terminal the active cell shows (its parent or a child).
+    fn active_terminal(&self, cx: &App) -> Option<Entity<TerminalView>> {
+        self.active_cell().map(|c| c.read(cx).current_terminal().clone())
     }
 
     fn active_cell(&self) -> Option<&Entity<CellView>> {
@@ -746,11 +753,11 @@ impl Workspace {
         {
             match &mut self.picker {
                 PickerStub::Auto => {
-                    if let Some(active) = self.active_terminal().cloned() {
+                    if let Some(active) = self.active_terminal(cx) {
                         active.update(cx, |t, cx| t.refresh_process_info(cx));
                     }
                     let dir = self
-                        .active_terminal()
+                        .active_terminal(cx)
                         .and_then(|t| t.read(cx).cwd().cloned())
                         .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
                     self.open_terminal_in(dir, window, cx);
@@ -923,7 +930,52 @@ impl Workspace {
                 let path = path.clone();
                 self.open_file_in(index, &path, Some(*line), false, window, cx);
             }
+            CellEvent::NewTerminalRequested => self.new_terminal_in_cell(index, window, cx),
+            CellEvent::TerminalChanged => {
+                if self.active == Some(index) {
+                    self.update_context(cx);
+                }
+                cx.notify();
+            }
+            CellEvent::ToggleZoom => {
+                self.set_active(index, window, cx);
+                self.toggle_zoom(&ToggleZoom, window, cx);
+            }
+            CellEvent::OpenPath(path, line) => {
+                let path = path.clone();
+                self.open_path(index, &path, *line, window, cx);
+            }
         }
+    }
+
+    /// "New terminal in cell": a child terminal of cell `index`, in the
+    /// folder of the terminal the cell shows. It shares the cell (files,
+    /// agent context) with its parent.
+    fn new_terminal_in_cell(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(cell) = self.cells.get(index).cloned() else { return };
+        let current = cell.read(cx).current_terminal().clone();
+        current.update(cx, |t, cx| t.refresh_process_info(cx));
+        let cwd = current.read(cx).cwd().cloned();
+        let id = self.next_id;
+        self.next_id += 1;
+        let settings = self.terminal_settings();
+        let view = cx.new(|cx| TerminalView::new(id, cwd, settings, window, cx));
+        cell.update(cx, |c, cx| c.add_terminal(view, cx));
+        self.set_active(index, window, cx);
+        crate::cell::focus_cell(&cell, window, cx);
+        self.update_context(cx);
+    }
+
+    /// Every terminal: parents and the cells' child terminals.
+    fn all_terminals(&self, cx: &App) -> Vec<Entity<TerminalView>> {
+        self.cells.iter().flat_map(|c| c.read(cx).terminals().cloned().collect::<Vec<_>>()).collect()
+    }
+
+    /// Cell whose shells (parent or children) `pid` descends from.
+    fn cell_of_pid(&self, pid: i32, cx: &App) -> Option<usize> {
+        self.cells.iter().position(|c| {
+            c.read(cx).terminals().any(|t| t.read(cx).child_pid().is_some_and(|shell| terminal::cwd::is_descendant(pid, shell)))
+        })
     }
 
     fn index_of(&self, view: &Entity<TerminalView>) -> Option<usize> {
@@ -956,18 +1008,23 @@ impl Workspace {
             }
             TerminalViewEvent::TitleChanged => {}
             TerminalViewEvent::OpenPath(path, line) => {
-                if path.is_file() {
-                    // The file belongs to the terminal it was clicked in.
-                    let path = path.clone();
-                    self.open_file_in(index, &path, *line, false, window, cx);
-                } else {
-                    self.sidebar_visible = true;
-                    self.panel = Panel::Explorer;
-                    let path = path.clone();
-                    self.explorer.update(cx, |e, cx| e.reveal(path, cx));
-                    cx.notify();
-                }
+                let path = path.clone();
+                self.open_path(index, &path, *line, window, cx);
             }
+        }
+    }
+
+    /// ⌘click on a path in a terminal of cell `index`: a file opens as a tab
+    /// of that cell, a folder is revealed in the explorer.
+    fn open_path(&mut self, index: usize, path: &std::path::Path, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
+        if path.is_file() {
+            self.open_file_in(index, path, line, false, window, cx);
+        } else {
+            self.sidebar_visible = true;
+            self.panel = Panel::Explorer;
+            let path = path.to_path_buf();
+            self.explorer.update(cx, |e, cx| e.reveal(path, cx));
+            cx.notify();
         }
     }
 
@@ -997,7 +1054,7 @@ impl Workspace {
     /// Only the active terminal is polled (it drives the tools' context);
     /// inactive terminals refresh their header when they produce output.
     fn poll_active_terminal(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.active_terminal().cloned() else { return };
+        let Some(view) = self.active_terminal(cx) else { return };
         if view.update(cx, |t, cx| t.refresh_process_info(cx)) {
             self.update_context(cx);
         }
@@ -1009,7 +1066,7 @@ impl Workspace {
         if self.context.pinned {
             return;
         }
-        let Some(view) = self.active_terminal() else { return };
+        let Some(view) = self.active_terminal(cx) else { return };
         let (id, cwd) = {
             let t = view.read(cx);
             (t.id(), t.cwd().cloned())
@@ -1204,14 +1261,14 @@ impl Workspace {
     fn on_panel_event<T>(&mut self, _: &Entity<T>, event: &PanelEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
             PanelEvent::InsertPath(path) => {
-                if let Some(view) = self.active_terminal().cloned() {
+                if let Some(view) = self.active_terminal(cx) {
                     let text = format!("{} ", shell_quote(&path.display().to_string()));
                     view.update(cx, |t, _| t.paste_text(&text));
                     window.focus(&view.focus_handle(cx), cx);
                 }
             }
             PanelEvent::Cd(dir) => {
-                if let Some(view) = self.active_terminal().cloned() {
+                if let Some(view) = self.active_terminal(cx) {
                     let cmd = format!("cd {}\r", shell_quote(&dir.display().to_string()));
                     view.update(cx, |t, _| t.write(cmd.into_bytes()));
                     window.focus(&view.focus_handle(cx), cx);
@@ -1286,7 +1343,7 @@ impl Workspace {
         }
         if terminal_changed {
             let settings = self.terminal_settings();
-            for t in &self.terminals {
+            for t in self.all_terminals(cx) {
                 t.update(cx, |t, cx| t.set_settings(settings.clone(), cx));
             }
         }
@@ -1791,7 +1848,8 @@ impl Workspace {
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let spec = self.grid_spec();
         let n = self.terminals.len();
-        let active = self.active_terminal().map(|t| t.read(cx));
+        let active = self.active_terminal(cx);
+        let active = active.as_ref().map(|t| t.read(cx));
         let process = active.and_then(|t| t.process_name().map(str::to_owned));
         let cwd = active.and_then(|t| t.cwd().map(|p| terminal::display_path(p)));
         div()

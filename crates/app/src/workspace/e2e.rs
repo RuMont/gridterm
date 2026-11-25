@@ -604,7 +604,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
     case!(r, "C6", "La cabecera muestra ruta, terminal y rama", {
         let ok = r.wait_until(3000, |ws, cx| ws.git.read(cx).branch_label().as_deref() == Some("main")).await;
         let (branch, tid, active_id, root) = r.read(|ws, cx| {
-            (ws.git.read(cx).branch_label(), ws.context.terminal_id, ws.active_terminal().map(|t| t.read(cx).id()), ws.context.root.clone())
+            (ws.git.read(cx).branch_label(), ws.context.terminal_id, ws.active_terminal(cx).map(|t| t.read(cx).id()), ws.context.root.clone())
         });
         ensure!(ok.is_some(), "branch {branch:?}");
         ensure!(tid == active_id && tid.is_some(), "terminal id {tid:?} vs active {active_id:?}");
@@ -849,7 +849,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         r.key("cmd-w");
         let n = r.n_terms();
         let active = r.active();
-        let active_id = r.read(|ws, cx| ws.active_terminal().map(|t| t.read(cx).id()));
+        let active_id = r.read(|ws, cx| ws.active_terminal(cx).map(|t| t.read(cx).id()));
         let focused = r.focused_terminal();
         ensure!(n == 5, "{n} terminals");
         ensure!(active == Some(1) && active_id == Some(id_next), "active {active:?} id {active_id:?} expected T{id_next}");
@@ -899,7 +899,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
     case!(r, "C1", "Cambiar el foco cambia el contexto", {
         let n = r.n_terms();
         r.key(&format!("cmd-{n}"));
-        let id = r.read(|ws, cx| ws.active_terminal().map(|t| t.read(cx).id())).ok_or("no active")?;
+        let id = r.read(|ws, cx| ws.active_terminal(cx).map(|t| t.read(cx).id())).ok_or("no active")?;
         pid.set(id);
         r.run(&format!("cd {plain_s}"));
         let plain = fx.plain.clone();
@@ -1309,6 +1309,101 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok(format!("user.ts:3 abierto en {d:?}"))
     });
 
+    case!(r, "TB1", "Clic derecho en las pestañas de una celda → «Nueva terminal en celda»", {
+        r.key("cmd-1");
+        r.sleep(100).await;
+        let b = r.read(|ws, cx| ws.cells[0].read(cx).bounds.get());
+        // Empty part of the tab bar, left of the zoom/close buttons.
+        let pos = point(b.origin.x + b.size.width - px(90.), b.origin.y + px(crate::cell::TAB_BAR_HEIGHT / 2.));
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: pos, pressed_button: None, modifiers: Modifiers::default() }));
+        r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Right, position: pos, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }));
+        r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Right, position: pos, modifiers: Modifiers::default(), click_count: 1 }));
+        r.sleep(150).await;
+        r.shot("TB1-menu");
+        r.key("down");
+        r.key("enter");
+        let ok = r.wait_until(2000, |ws, cx| ws.cells[0].read(cx).children().len() == 1).await;
+        let parent_cwd = r.read(|ws, cx| ws.terminals[0].read(cx).cwd().cloned());
+        let (n_cells, shown_child, ctx) = r.read(|ws, cx| {
+            let c = ws.cells[0].read(cx);
+            let child = c.children().first().map(|t| t.read(cx).id());
+            (ws.cells.len(), child.filter(|id| Some(*id) == Some(c.current_terminal().read(cx).id())), ws.context.terminal_id)
+        });
+        ok.ok_or("no child terminal after the menu")?;
+        let child = shown_child.ok_or("the new terminal is not the one shown")?;
+        ensure!(n_cells == r.read(|ws, _| ws.terminals.len()), "a grid cell was added");
+        ensure!(ctx == Some(child), "tools context follows T{ctx:?}, expected the child T{child}");
+        let child_cwd = r.wait_until(3000, |ws, cx| {
+            let c = ws.cells[0].read(cx);
+            c.children().first().is_some_and(|t| t.read(cx).child_pid().is_some())
+        }).await;
+        ensure!(child_cwd.is_some(), "child shell did not start");
+        let _ = parent_cwd;
+        Ok(format!("hija T{child} mostrada; el contexto la sigue"))
+    });
+
+    case!(r, "TB2", "La terminal hija: misma carpeta, mismo contexto de agente, ⌘W la cierra (no la celda)", {
+        let parent_cwd = r.read(|ws, cx| ws.terminals[0].read(cx).cwd().cloned()).ok_or("parent cwd unknown")?;
+        r.run("echo CHILD_MARK; pwd");
+        let cwd_line = parent_cwd.display().to_string();
+        let c2 = cwd_line.clone();
+        let shown = r.wait_until(3000, move |ws, cx| {
+            let c = ws.cells[0].read(cx);
+            // A long path wraps over several rows.
+            c.children().first().is_some_and(|t| t.read(cx).visible_text().replace('\n', "").contains(&c2))
+        }).await;
+        let text = r.read(|ws, cx| ws.cells[0].read(cx).children().first().map(|t| t.read(cx).visible_text()).unwrap_or_default());
+        ensure!(shown.is_some(), "child did not start in {cwd_line}:\n{text}");
+        let parent_text = r.term_text(0);
+        ensure!(!parent_text.contains("CHILD_MARK"), "typing reached the parent:\n{parent_text}");
+        // An agent in the child gets the cell's context, like one in the parent.
+        let cell = r.read(|ws, cx| {
+            let pid = ws.cells[0].read(cx).children()[0].read(cx).child_pid()?;
+            ws.cell_of_pid(pid, cx)
+        });
+        ensure!(cell == Some(0), "child shell maps to cell {cell:?}");
+        let n = r.read(|ws, _| ws.terminals.len());
+        r.key("cmd-w");
+        let closed = r.wait_until(2000, |ws, cx| ws.cells[0].read(cx).children().is_empty()).await;
+        let (n2, current, parent) = r.read(|ws, cx| {
+            let c = ws.cells[0].read(cx);
+            (ws.terminals.len(), c.current_terminal().read(cx).id(), ws.terminals[0].read(cx).id())
+        });
+        closed.ok_or("⌘W did not close the child")?;
+        ensure!(n2 == n, "⌘W closed a cell ({n} → {n2})");
+        ensure!(current == parent, "after closing, T{current} shown instead of the parent");
+        ensure!(r.focused_terminal() == Some(0), "focus {:?}", r.focused_terminal());
+        Ok("pwd en la carpeta de la padre; misma celda para el agente; ⌘W cierra solo la hija".into())
+    });
+
+    case!(r, "TB3", "Pestañas de una celda: se desplazan en horizontal con ⇧rueda y la abierta se ve", {
+        r.key("cmd-1");
+        let files: Vec<PathBuf> = (0..12).map(|i| repo.join(format!("tabs/long_file_name_number_{i:02}.txt"))).collect();
+        for f in &files {
+            write(f, "x\n");
+        }
+        for f in &files {
+            r.open_in(0, f, None, false);
+        }
+        r.next_frame().await;
+        r.next_frame().await;
+        let offset = |r: &mut Runner<'_>| r.read(|ws, cx| ws.cells[0].read(cx).tab_scroll.offset().x);
+        let after_open = offset(r);
+        let b = r.read(|ws, cx| ws.cells[0].read(cx).bounds.get());
+        let pos = point(b.origin.x + px(150.), b.origin.y + px(crate::cell::TAB_BAR_HEIGHT / 2.));
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: pos, pressed_button: None, modifiers: Modifiers::default() }));
+        let shift = Modifiers { shift: true, ..Default::default() };
+        r.mouse(PlatformInput::Scroll(ScrollEvent { position: pos, delta: ScrollDelta::Pixels(point(px(0.), px(200.))), modifiers: shift, touch_phase: TouchPhase::Moved, source: ScrollSource::Pointer }));
+        r.next_frame().await;
+        let after_scroll = offset(r);
+        r.shot("TB3-tabs");
+        r.close_all_tabs();
+        std::fs::remove_dir_all(repo.join("tabs")).ok();
+        ensure!(after_open < px(0.), "opening the last tab did not scroll it into view (offset {after_open:?})");
+        ensure!(after_scroll > after_open, "⇧wheel did not scroll the tabs ({after_open:?} → {after_scroll:?})");
+        Ok(format!("offset {after_open:?} → {after_scroll:?}"))
+    });
+
     // ---------------------------------------------------------------- git --
     r.key("cmd-1");
     r.with(|ws, w, cx| ws.show_panel(Panel::Git, w, cx));
@@ -1682,7 +1777,7 @@ async fn pending_cases(r: &mut Runner<'_>, fx: &Fixture) {
     r.key("cmd-t");
     r.key("cmd-1");
     r.sleep(800).await;
-    let active_view = |r: &mut Runner<'_>| r.read(|ws, _| ws.active_terminal().cloned()).expect("active terminal");
+    let active_view = |r: &mut Runner<'_>| r.read(|ws, cx| ws.active_terminal(cx)).expect("active terminal");
 
     // ------------------------------------------------------------------ IME --
     case!(r, "I2b", "La shell recibe un locale UTF-8 aunque la app arranque sin LANG", {
@@ -2550,12 +2645,12 @@ async fn process_cases(r: &mut Runner<'_>, fx: &Fixture) {
         r.run("echo ARMED_$((2*21)); sleep 1.5; exit");
         r.wait_text(victim, "ARMED_42", 3000).await.ok_or("command not started")?;
         r.key("cmd-1");
-        let keep_id = r.read(|ws, cx| ws.active_terminal().map(|t| t.read(cx).id())).ok_or("no active")?;
+        let keep_id = r.read(|ws, cx| ws.active_terminal(cx).map(|t| t.read(cx).id())).ok_or("no active")?;
         let n = r.n_terms();
         let gone = r.wait_until(4000, move |ws, cx| !ws.terminals.iter().any(|t| t.read(cx).id() == victim_id)).await;
         ensure!(gone.is_some() && r.n_terms() == n - 1, "terminal T{victim_id} did not close");
         let (active_id, actives) = r.read(|ws, cx| {
-            (ws.active_terminal().map(|t| t.read(cx).id()), ws.terminals.iter().filter(|t| t.read(cx).is_active()).count())
+            (ws.active_terminal(cx).map(|t| t.read(cx).id()), ws.terminals.iter().filter(|t| t.read(cx).is_active()).count())
         });
         let focused_idx = r.focused_terminal();
         let focused_id = focused_idx.map(|i| r.read(move |ws, cx| ws.terminals[i].read(cx).id()));

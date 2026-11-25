@@ -1,12 +1,17 @@
-//! A grid cell: one terminal plus the files opened from it, shown as tabs.
+//! A grid cell: its terminal plus the files opened from it, shown as tabs.
 //!
-//! The first tab is always the terminal; file tabs follow. At most one file
-//! tab is a *preview* (italic): opening another file in preview mode replaces
-//! it, opening it "for real" pins it. Hidden terminals keep running but are not
-//! painted; output while hidden is flagged with a dot on the terminal tab.
+//! The first tab is always the cell's *parent* terminal (numbered in the grid,
+//! saved in the session; closing it closes the cell). Right-clicking the tab
+//! bar adds *child* terminals, which share the cell: its files, and what an
+//! agent running in any of them sees. File tabs follow the terminals. At most
+//! one file tab is a *preview* (italic): opening another file in preview mode
+//! replaces it, opening it "for real" pins it. Hidden terminals keep running
+//! but are not painted; output of the hidden parent is flagged with a dot on
+//! its tab. The tab strip scrolls sideways (wheel, ⇧wheel, trackpad).
 
 use std::path::{Path, PathBuf};
 
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use terminal::colors::palette;
@@ -24,6 +29,14 @@ pub enum CellEvent {
     ViewChanged,
     /// Open a file of this cell at a 1-based line (go to definition).
     OpenFile { path: PathBuf, line: u32 },
+    /// "New terminal in cell" from the tab bar's context menu.
+    NewTerminalRequested,
+    /// Another terminal of the cell is shown (the tools follow it).
+    TerminalChanged,
+    /// A child terminal asked for the zoom (⌘⇧↩ or its button).
+    ToggleZoom,
+    /// ⌘click on a path in a child terminal.
+    OpenPath(PathBuf, Option<u32>),
 }
 
 /// Selection moves are reported to agents after this quiet period.
@@ -44,9 +57,14 @@ struct TerminalSnapshot {
 }
 
 pub struct CellView {
+    /// The parent terminal.
     terminal: Entity<TerminalView>,
+    /// Child terminals, after the parent in the tab bar.
+    children: Vec<Entity<TerminalView>>,
+    /// Terminal shown when no file is: 0 the parent, `i + 1` child `i`.
+    shown_terminal: usize,
     tabs: Vec<FileTab>,
-    /// Visible file tab; `None` shows the terminal.
+    /// Visible file tab; `None` shows a terminal (`shown_terminal`).
     visible: Option<usize>,
     snapshot: TerminalSnapshot,
     /// Terminal output batches when it was last visible.
@@ -62,6 +80,7 @@ pub struct CellView {
     /// switching back to the terminal tab to talk to it.
     last_viewed: Option<Entity<FileViewer>>,
     view_task: Option<Task<()>>,
+    pub(crate) tab_scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,9 +92,18 @@ impl CellView {
         let observe = cx.observe(&terminal, |this, terminal, cx| {
             let t = terminal.read(cx);
             let snapshot = snapshot_of(t);
+            let output_batches = t.output_batches();
             let mut changed = snapshot != this.snapshot;
+            if snapshot.active != this.snapshot.active {
+                // Children look active (cursor, no dimming) with their parent.
+                let active = snapshot.active;
+                for child in this.children.clone() {
+                    child.update(cx, |c, cx| c.set_active(active, cx));
+                }
+            }
             this.snapshot = snapshot;
-            if this.visible.is_some() && !this.activity && t.output_batches() > this.seen_batches {
+            let parent_hidden = this.visible.is_some() || this.shown_terminal != 0;
+            if parent_hidden && !this.activity && output_batches > this.seen_batches {
                 this.activity = true;
                 changed = true;
             }
@@ -86,6 +114,8 @@ impl CellView {
         let snapshot = snapshot_of(terminal.read(cx));
         Self {
             terminal,
+            children: Vec::new(),
+            shown_terminal: 0,
             tabs: Vec::new(),
             visible: None,
             snapshot,
@@ -97,8 +127,82 @@ impl CellView {
             activity_bounds: Default::default(),
             last_viewed: None,
             view_task: None,
+            tab_scroll: ScrollHandle::new(),
             _subscriptions: vec![observe],
         }
+    }
+
+    /// The terminal shown when no file is (the parent or a child).
+    pub fn current_terminal(&self) -> &Entity<TerminalView> {
+        self.shown_terminal.checked_sub(1).and_then(|i| self.children.get(i)).unwrap_or(&self.terminal)
+    }
+
+    /// The parent and the child terminals.
+    pub fn terminals(&self) -> impl Iterator<Item = &Entity<TerminalView>> {
+        std::iter::once(&self.terminal).chain(&self.children)
+    }
+
+    #[cfg_attr(not(feature = "e2e"), allow(dead_code))]
+    pub fn children(&self) -> &[Entity<TerminalView>] {
+        &self.children
+    }
+
+    /// Adds a child terminal and shows it.
+    pub fn add_terminal(&mut self, view: Entity<TerminalView>, cx: &mut Context<Self>) {
+        let active = self.snapshot.active;
+        view.update(cx, |t, cx| {
+            t.set_chrome(false, cx);
+            t.set_active(active, cx);
+        });
+        let sub = cx.subscribe(&view, |this, view, event: &TerminalViewEvent, cx| match event {
+            TerminalViewEvent::CloseRequested | TerminalViewEvent::Exited => this.close_child(&view, cx),
+            TerminalViewEvent::Focused => cx.emit(CellEvent::Focused),
+            TerminalViewEvent::ToggleZoom => cx.emit(CellEvent::ToggleZoom),
+            TerminalViewEvent::OpenPath(path, line) => cx.emit(CellEvent::OpenPath(path.clone(), *line)),
+            TerminalViewEvent::TitleChanged => cx.notify(),
+        });
+        // The tab shows its label and folder: repaint when they change.
+        let observe = cx.observe(&view, |_, _, cx| cx.notify());
+        self._subscriptions.extend([sub, observe]);
+        self.children.push(view);
+        self.show_terminal(self.children.len(), cx);
+    }
+
+    /// Shows terminal `index` (0 the parent, `i + 1` child `i`).
+    pub fn show_terminal(&mut self, index: usize, cx: &mut Context<Self>) {
+        let index = index.min(self.children.len());
+        if index == 0 {
+            self.activity = false;
+        } else if self.shown_terminal == 0 && self.visible.is_none() {
+            self.seen_batches = self.terminal.read(cx).output_batches();
+        }
+        let changed = index != self.shown_terminal;
+        self.shown_terminal = index;
+        self.show(None, cx);
+        self.tab_scroll.scroll_to_item(index);
+        if changed {
+            cx.emit(CellEvent::TerminalChanged);
+        }
+    }
+
+    fn close_child(&mut self, view: &Entity<TerminalView>, cx: &mut Context<Self>) {
+        let Some(i) = self.children.iter().position(|c| c == view) else { return };
+        // Dropping the view hangs up its shell.
+        self.children.remove(i);
+        let shown = self.shown_terminal;
+        if shown == i + 1 {
+            // Closing the shown child shows its left neighbour.
+            self.shown_terminal = i;
+            if self.visible.is_none() {
+                if i == 0 {
+                    self.activity = false;
+                }
+                cx.emit(CellEvent::TerminalChanged);
+            }
+        } else if shown > i + 1 {
+            self.shown_terminal -= 1;
+        }
+        cx.notify();
     }
 
     pub fn tabs(&self) -> &[FileTab] {
@@ -168,14 +272,17 @@ impl CellView {
     /// Shows the terminal (`None`) or file tab `index`.
     pub fn show(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
         let index = index.filter(|i| *i < self.tabs.len());
-        if index.is_none() {
+        if index.is_none() && self.shown_terminal == 0 {
             self.activity = false;
-        } else if self.visible.is_none() {
+        } else if self.visible.is_none() && self.shown_terminal == 0 {
             self.seen_batches = self.terminal.read(cx).output_batches();
         }
         self.visible = index;
         if let Some(viewer) = self.visible_viewer().cloned() {
             self.set_last_viewed(Some(viewer), cx);
+        }
+        if let Some(i) = index {
+            self.tab_scroll.scroll_to_item(1 + self.children.len() + i);
         }
         cx.notify();
     }
@@ -219,10 +326,14 @@ impl CellView {
 
     /// Cycles through terminal + file tabs.
     pub fn cycle(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let n = self.tabs.len() + 1;
-        let pos = self.visible.map_or(0, |i| i + 1);
+        let terminals = 1 + self.children.len();
+        let n = terminals + self.tabs.len();
+        let pos = self.visible.map_or(self.shown_terminal, |i| terminals + i);
         let next = if forward { (pos + 1) % n } else { (pos + n - 1) % n };
-        self.show(next.checked_sub(1), cx);
+        match next.checked_sub(terminals) {
+            Some(file) => self.show(Some(file), cx),
+            None => self.show_terminal(next, cx),
+        }
     }
 
     pub fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -235,8 +346,8 @@ impl CellView {
             self.set_last_viewed(None, cx);
         }
         let visible = match self.visible {
-            // Closing the visible tab shows its left neighbour (the terminal
-            // is the leftmost tab).
+            // Closing the visible tab shows its left neighbour (the shown
+            // terminal stands left of the files).
             Some(v) if v == index => index.checked_sub(1),
             Some(v) if v > index => Some(v - 1),
             other => other,
@@ -244,11 +355,17 @@ impl CellView {
         self.show(visible, cx);
     }
 
-    /// Closes the visible file tab; false when the terminal is visible.
+    /// Closes the visible file tab or child terminal; false when the parent
+    /// terminal is visible (closing it closes the cell).
     pub fn close_visible_tab(&mut self, cx: &mut Context<Self>) -> bool {
         match self.visible {
             Some(i) => {
                 self.close_tab(i, cx);
+                true
+            }
+            None if self.shown_terminal > 0 => {
+                let child = self.current_terminal().clone();
+                self.close_child(&child, cx);
                 true
             }
             None => false,
@@ -259,7 +376,7 @@ impl CellView {
     pub fn selected_text(&self, cx: &App) -> Option<String> {
         match self.visible_viewer() {
             Some(v) => v.read(cx).selected_text(cx),
-            None => self.terminal.read(cx).selection_text(),
+            None => self.current_terminal().read(cx).selection_text(),
         }
     }
 
@@ -267,13 +384,13 @@ impl CellView {
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self.visible_viewer().cloned() {
             Some(v) => FileViewer::focus(&v, window, cx),
-            None => window.focus(&self.terminal.focus_handle(cx), cx),
+            None => window.focus(&self.current_terminal().focus_handle(cx), cx),
         }
     }
 
-    /// Whether the terminal or one of the viewers holds focus.
+    /// Whether a terminal or one of the viewers holds focus.
     pub fn contains_focused(&self, window: &Window, cx: &App) -> bool {
-        self.terminal.focus_handle(cx).contains_focused(window, cx)
+        self.terminals().any(|t| t.focus_handle(cx).contains_focused(window, cx))
             || self.tabs.iter().any(|t| t.viewer.read(cx).contains_focused(window, cx))
     }
 
@@ -288,7 +405,7 @@ impl CellView {
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette();
         let s = &self.snapshot;
-        let terminal_visible = self.visible.is_none();
+        let terminal_visible = self.visible.is_none() && self.shown_terminal == 0;
         // The visible tab of the active cell carries the accent.
         let tab_colors = |visible: bool| -> (Rgba, Rgba) {
             match (visible, s.active) {
@@ -315,7 +432,7 @@ impl CellView {
             .text_color(fg)
             .cursor_pointer()
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                this.show(None, cx);
+                this.show_terminal(0, cx);
                 window.focus(&this.terminal.focus_handle(cx), cx);
             }))
             .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(format!("{id}")))
@@ -334,6 +451,42 @@ impl CellView {
             })
             .child(div().flex_none().child(s.label.clone()))
             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().opacity(0.75).child(cwd));
+
+        let child_tabs = self.children.iter().enumerate().map(|(i, child)| {
+            let visible = self.visible.is_none() && self.shown_terminal == i + 1;
+            let (bg, fg) = tab_colors(visible);
+            let t = child.read(cx);
+            let cwd = t.cwd().map(|p| terminal::display_path(p)).unwrap_or_default();
+            let child = child.clone();
+            div()
+                .id(("tab-child", i))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .h_full()
+                .pl_2()
+                .pr_1()
+                .max_w(px(220.))
+                .flex_none()
+                .overflow_hidden()
+                .bg(bg)
+                .text_color(fg)
+                .border_l_1()
+                .border_color(rgb(p.border))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.show_terminal(i + 1, cx);
+                    this.focus(window, cx);
+                }))
+                .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(format!("{}", t.id())))
+                .child(div().flex_none().child(t.label()))
+                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().opacity(0.75).child(cwd))
+                .child(tab_button(("tab-child-close", i), "✕", cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.close_child(&child, cx);
+                })))
+        });
 
         let file_tabs = self.tabs.iter().enumerate().map(|(i, tab)| {
             let visible = self.visible == Some(i);
@@ -381,6 +534,7 @@ impl CellView {
 
         let terminal = self.terminal.clone();
         let terminal2 = self.terminal.clone();
+        let cell = cx.weak_entity();
         div()
             .id("tab-bar")
             .flex()
@@ -391,9 +545,30 @@ impl CellView {
             .bg(rgb(p.header_bg))
             .text_xs()
             .overflow_hidden()
-            .child(terminal_tab)
-            .children(file_tabs)
-            .child(div().flex_1().min_w(px(4.)))
+            .child(
+                // Tabs scroll sideways when they do not fit (wheel, ⇧wheel,
+                // trackpad); the zoom/close buttons stay put.
+                div()
+                    .id("tab-strip")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .h_full()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .track_scroll(&self.tab_scroll)
+                    .child(terminal_tab)
+                    .children(child_tabs)
+                    .children(file_tabs)
+                    .child(div().flex_1().min_w(px(4.)).h_full()),
+            )
+            .context_menu(move |menu, _, _| {
+                let cell = cell.clone();
+                menu.item(PopupMenuItem::new("Nueva terminal en celda").on_click(move |_, _, cx| {
+                    let _ = cell.update(cx, |_, cx| cx.emit(CellEvent::NewTerminalRequested));
+                }))
+            })
             .child(
                 div()
                     .flex()
@@ -416,7 +591,7 @@ impl CellView {
 pub fn focus_cell(cell: &Entity<CellView>, window: &mut Window, cx: &mut App) {
     let (viewer, terminal) = {
         let c = cell.read(cx);
-        (c.visible_viewer().cloned(), c.terminal.focus_handle(cx))
+        (c.visible_viewer().cloned(), c.current_terminal().focus_handle(cx))
     };
     match viewer {
         Some(v) => FileViewer::focus(&v, window, cx),
@@ -447,7 +622,7 @@ impl Render for CellView {
         let border = if self.snapshot.active { rgb(p.accent) } else { rgb(p.border) };
         let body = match self.visible_viewer() {
             Some(viewer) => viewer.clone().into_any_element(),
-            None => AnyView::from(self.terminal.clone()).cached(StyleRefinement::default().size_full()).into_any_element(),
+            None => AnyView::from(self.current_terminal().clone()).cached(StyleRefinement::default().size_full()).into_any_element(),
         };
         let (b, bb) = (self.bounds.clone(), self.body_bounds.clone());
         div()
