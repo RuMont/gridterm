@@ -72,6 +72,9 @@ impl OpCtx {
     }
 }
 
+/// The pinned file header and where it was painted (e2e).
+pub(crate) type StickyProbe = std::rc::Rc<std::cell::Cell<Option<(usize, Bounds<Pixels>)>>>;
+
 /// One row of the history window's list (all of the same height).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HRow {
@@ -108,8 +111,10 @@ fn band_rows(d: &CommitDetails) -> Vec<BandRow> {
         BandRow::Author { who: format!("{} <{}>", d.author_name, d.author_email), when: commit_date(d.author_time) },
     ];
     rows.extend(d.message.lines().enumerate().map(|(k, line)| BandRow::Message { text: line.to_string(), summary: k == 0 }));
-    if let Some(url) = &d.web_url {
-        rows.push(BandRow::Link(url.clone()));
+    match &d.web_url {
+        Some(url) => rows.push(BandRow::Link(url.clone())),
+        None if !d.on_remote => rows.push(BandRow::Note("Only local: not on the remote yet".into())),
+        None => {}
     }
     let (added, removed) = d.files.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
     let n = d.files.len();
@@ -158,6 +163,11 @@ pub struct GitPanel {
     /// Rows of the history window: commits, and under the open one its
     /// details band and diff.
     pub(crate) history_rows: Vec<HRow>,
+    /// Files of the unfolded commit whose diff is shown (all start closed).
+    pub(crate) open_files: BTreeSet<usize>,
+    /// Painted file headers (by file) and the sticky header (e2e).
+    pub(crate) file_header_bounds: std::rc::Rc<std::cell::RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    pub(crate) sticky_bounds: StickyProbe,
     refresh_task: Option<Task<()>>,
     refresh_pending: bool,
     op_task: Option<Task<()>>,
@@ -231,6 +241,9 @@ impl GitPanel {
             commit_details: None,
             details_task: None,
             history_rows: Vec::new(),
+            open_files: BTreeSet::new(),
+            file_header_bounds: Default::default(),
+            sticky_bounds: Default::default(),
             refresh_task: None,
             refresh_pending: false,
             op_task: None,
@@ -338,6 +351,7 @@ impl GitPanel {
             return;
         }
         self.open_commit = sha.clone();
+        self.open_files.clear();
         self.commit_details = None;
         self.details_task = None;
         if let (Some(sha), Some(repo)) = (sha, self.repo.clone()) {
@@ -360,6 +374,49 @@ impl GitPanel {
         cx.notify();
     }
 
+    /// Opens or closes the diff of file `f` of the unfolded commit. Closing
+    /// a file whose header is stuck at the top brings its header back there.
+    pub(crate) fn toggle_commit_file(&mut self, f: usize, cx: &mut Context<Self>) {
+        let stuck = self.sticky_file().is_some_and(|(sf, _)| sf == f);
+        if !self.open_files.remove(&f) {
+            self.open_files.insert(f);
+        }
+        self.rebuild_history_rows();
+        if stuck {
+            if let Some(row) = self.history_rows.iter().position(|r| *r == HRow::File(f)) {
+                self.history_scroll.scroll_to_item(row, ScrollStrategy::Top);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The open file whose header has scrolled out of the top of the
+    /// history window, and how far the next header pushes it up (≤ 0).
+    pub(crate) fn sticky_file(&self) -> Option<(usize, Pixels)> {
+        let row_h = theme::ROW_HEIGHT;
+        let offset = -f32::from(self.history_scroll.0.borrow().base_handle.offset().y);
+        if offset <= 0.0 {
+            return None;
+        }
+        // The row at the top edge, and the file it belongs to: walk up to
+        // the file's header (a commit or the details band first: none).
+        let first = (offset / row_h) as usize;
+        let f = self.history_rows.get(..=first)?.iter().rev().find_map(|r| match r {
+            HRow::Hunk(..) | HRow::Line(..) | HRow::Note(_) => None,
+            HRow::File(f) => Some(Some(*f)),
+            _ => Some(None),
+        })??;
+        if !self.open_files.contains(&f) {
+            return None;
+        }
+        // The row that ends this file pushes the pinned header up.
+        let push = match self.history_rows.get(first + 1) {
+            Some(HRow::File(_) | HRow::Commit(_) | HRow::End) => (first + 1) as f32 * row_h - offset - row_h,
+            _ => 0.0,
+        };
+        Some((f, px(push.min(0.0))))
+    }
+
     fn toggle_commit(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(sha) = self.log.get(i).map(|c| c.sha.clone()) else { return };
         let open = (self.open_commit.as_deref() != Some(sha.as_str())).then_some(sha);
@@ -380,6 +437,9 @@ impl GitPanel {
                     rows.extend(band_rows(d).into_iter().map(HRow::Band));
                     for (f, file) in d.files.iter().enumerate() {
                         rows.push(HRow::File(f));
+                        if !self.open_files.contains(&f) {
+                            continue;
+                        }
                         if file.diff.binary {
                             rows.push(HRow::Note("Binary file".into()));
                         }
@@ -1215,6 +1275,7 @@ impl Render for GitPanel {
         self.revert_buttons.borrow_mut().clear();
         self.graph_bounds.borrow_mut().clear();
         self.chip_bounds.borrow_mut().clear();
+        self.file_header_bounds.borrow_mut().clear();
         if self.repo.is_none() {
             return div().flex().flex_col().flex_1().child(empty_state("The active terminal is not inside a git repository.")).into_any_element();
         }
@@ -1286,16 +1347,45 @@ impl GitPanel {
             .child(if self.log.is_empty() {
                 empty_state("No commits yet.").into_any_element()
             } else {
-                uniform_list(
-                    "git-history-rows",
-                    self.history_rows.len(),
-                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        range.map(|ix| this.render_history_row(ix, cx)).collect::<Vec<_>>()
-                    }),
-                )
-                .track_scroll(&self.history_scroll)
-                .flex_1()
-                .into_any_element()
+                let sticky = self.sticky_file();
+                self.sticky_bounds.set(None);
+                let probe = self.sticky_bounds.clone();
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(
+                        uniform_list(
+                            "git-history-rows",
+                            self.history_rows.len(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range.map(|ix| this.render_history_row(ix, cx)).collect::<Vec<_>>()
+                            }),
+                        )
+                        .track_scroll(&self.history_scroll)
+                        .flex_1(),
+                    )
+                    // The open file scrolled past the top keeps its header
+                    // pinned there (a click closes the file).
+                    .when_some(sticky, |el, (f, push)| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .top(push)
+                                .left_0()
+                                .right_0()
+                                .occlude()
+                                .shadow_md()
+                                .border_b_1()
+                                .border_color(rgb(theme::surface1()))
+                                .child(self.render_file_header(f, "history-sticky-file".into(), cx))
+                                .child(canvas(move |b, _, _| probe.set(Some((f, b))), |_, _, _, _| {}).absolute().inset_0()),
+                        )
+                    })
+                    .into_any_element()
             })
     }
 }
@@ -1366,23 +1456,11 @@ impl GitPanel {
                 .into_any_element()
             }
             HRow::File(f) => {
-                let Some(file) = details.and_then(|d| d.files.get(f)) else { return div().into_any_element() };
-                let color = match file.status {
-                    'A' => theme::green(),
-                    'D' => theme::red(),
-                    'R' | 'C' => theme::mauve(),
-                    _ => theme::yellow(),
-                };
-                let path = match &file.old_path {
-                    Some(old) => format!("{} → {}", old.display(), file.diff.path.display()),
-                    None => file.diff.path.display().to_string(),
-                };
-                band(("history-file", ix).into())
-                    .bg(rgb(theme::base()))
-                    .child(div().flex_none().w(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(color)).child(file.status.to_string()))
-                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::MEDIUM).text_color(rgb(theme::text())).child(path))
-                    .child(div().flex_none().text_color(rgb(theme::green())).child(format!("+{}", file.added)))
-                    .child(div().flex_none().text_color(rgb(theme::red())).child(format!("−{}", file.removed)))
+                let probe = self.file_header_bounds.clone();
+                div()
+                    .relative()
+                    .child(self.render_file_header(f, ("history-file", ix).into(), cx))
+                    .child(canvas(move |b, _, _| { probe.borrow_mut().insert(f, b); }, |_, _, _, _| {}).absolute().inset_0())
                     .into_any_element()
             }
             HRow::Hunk(f, h) => {
@@ -1416,6 +1494,50 @@ impl GitPanel {
             HRow::Note(text) => band(("history-note", ix).into()).child(div().italic().text_color(rgb(theme::overlay0())).child(text)).into_any_element(),
             HRow::End => div().id(("history-end", ix)).w_full().h(px(theme::ROW_HEIGHT)).border_t_1().border_color(rgb(theme::surface1())).into_any_element(),
         }
+    }
+}
+
+impl GitPanel {
+    /// Header of file `f` of the unfolded commit: a click opens or closes
+    /// its diff. Also drawn pinned at the top of the window (`render_expanded`).
+    fn render_file_header(&self, f: usize, id: ElementId, cx: &mut Context<Self>) -> AnyElement {
+        let Some(file) = self.commit_details.as_ref().and_then(|d| d.as_ref().ok()).and_then(|d| d.files.get(f)) else {
+            return div().into_any_element();
+        };
+        let open = self.open_files.contains(&f);
+        let color = match file.status {
+            'A' => theme::green(),
+            'D' => theme::red(),
+            'R' | 'C' => theme::mauve(),
+            _ => theme::yellow(),
+        };
+        let path = match &file.old_path {
+            Some(old) => format!("{} → {}", old.display(), file.diff.path.display()),
+            None => file.diff.path.display().to_string(),
+        };
+        div()
+            .id(id)
+            .w_full()
+            .h(px(theme::ROW_HEIGHT))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .text_xs()
+            .pl(px(30.))
+            .pr_2()
+            .bg(rgb(theme::base()))
+            .border_l_2()
+            .border_color(rgb(theme::accent()))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(theme::surface0())))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_commit_file(f, cx)))
+            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(12.)).flex_none().text_color(rgb(theme::overlay0())))
+            .child(div().flex_none().w(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(color)).child(file.status.to_string()))
+            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::MEDIUM).text_color(rgb(theme::text())).child(path))
+            .child(div().flex_none().text_color(rgb(theme::green())).child(format!("+{}", file.added)))
+            .child(div().flex_none().text_color(rgb(theme::red())).child(format!("−{}", file.removed)))
+            .into_any_element()
     }
 }
 

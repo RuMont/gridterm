@@ -23,8 +23,11 @@ pub struct CommitDetails {
     pub files: Vec<CommitFile>,
     /// Diffs were cut at the line limit (the remaining files have no hunks).
     pub truncated: bool,
-    /// The commit's page on the remote (GitHub, GitLab, Bitbucket…), if the
-    /// default remote is a known web host.
+    /// The commit is on a remote: reachable from a remote-tracking branch
+    /// (as of the last fetch).
+    pub on_remote: bool,
+    /// The commit's page on the remote (GitHub, GitLab, Bitbucket…): only
+    /// for commits on the remote, when the default remote is a web host.
     pub web_url: Option<String>,
 }
 
@@ -89,7 +92,9 @@ impl GitRepo {
         }
 
         let author = commit.author();
+        let on_remote = on_remote(&repo, oid)?;
         let web_url = crate::repo::default_remote(&repo)?
+            .filter(|_| on_remote)
             .and_then(|name| repo.find_remote(&name).ok()?.url().ok().map(str::to_owned))
             .and_then(|url| commit_web_url(&url, sha));
         let committer = commit.committer();
@@ -103,10 +108,26 @@ impl GitRepo {
             parents: commit.parent_ids().map(|p| p.to_string()).collect(),
             files,
             truncated,
+            on_remote,
             web_url,
         };
         Ok(details)
     }
+}
+
+/// Whether `oid` is reachable from any remote-tracking branch.
+fn on_remote(repo: &git2::Repository, oid: Oid) -> Result<bool> {
+    for reference in repo.references_glob("refs/remotes/*")? {
+        let reference = reference?;
+        if reference.kind() == Some(git2::ReferenceType::Symbolic) {
+            continue;
+        }
+        let Ok(tip) = reference.peel_to_commit() else { continue };
+        if tip.id() == oid || repo.graph_descendant_of(tip.id(), oid)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Web page of commit `sha` for remote `url`

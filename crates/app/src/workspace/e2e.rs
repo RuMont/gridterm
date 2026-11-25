@@ -1617,7 +1617,10 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         let lines = rows.iter().filter(|row| matches!(row, HRow::Line(..))).count();
         ensure!(band_sha, "no details band with the full sha");
         ensure!(rows.iter().any(|row| matches!(row, HRow::Band(BandRow::Author { .. }))), "no author in the band");
-        ensure!(files > 0 && lines > 0, "diff not shown: {files} files, {lines} lines");
+        // Pushed (origin/main has it): not flagged as local only.
+        ensure!(!rows.iter().any(|row| matches!(row, HRow::Band(BandRow::Note(n)) if n.starts_with("Only local"))), "a pushed commit is flagged as local only");
+        ensure!(files > 0, "no files listed");
+        ensure!(lines == 0, "files should start closed, {lines} diff lines shown");
         // In the window a click on the commit folds it.
         let wide = r.read(move |ws, cx| ws.git.read(cx).graph_bounds.borrow().get(&i).map(|b| b.center())).ok_or("commit row not painted in the window")?;
         r.click_at(wide, 1, Modifiers::default());
@@ -1626,7 +1629,81 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         r.key("escape");
         folded.ok_or("a click on the open commit did not fold it")?;
         ensure!(still_open, "folding closed the window");
-        Ok(format!("{files} archivos, {lines} líneas de diff"))
+        Ok(format!("{files} archivos, cerrados"))
+    });
+
+    case!(r, "GH3", "Archivos de un commit: se abren con clic; al hacer scroll la cabecera queda fija arriba y desde ahí se cierra", {
+        use crate::panels::git::HRow;
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().map(|o| o.status.success()).unwrap_or(false);
+        let big: String = (1..=300).map(|n| format!("line {n}\n")).collect();
+        write(&repo.join("big.txt"), &big);
+        write(&repo.join("small.txt"), "small\n");
+        ensure!(git(&["add", "big.txt", "small.txt"]) && git(&["commit", "-q", "-m", "big diff"]), "cannot commit");
+        let sha = r.wait_until(5000, |ws, cx| ws.git.read(cx).log.first().is_some_and(|c| c.summary == "big diff")).await
+            .and_then(|_| r.read(|ws, cx| ws.git.read(cx).log.first().map(|c| c.sha.clone())))
+            .ok_or("commit not in the log")?;
+        r.with({
+            let sha = sha.clone();
+            move |ws, _, cx| ws.git.update(cx, |g, cx| g.open_history_at(sha, cx))
+        });
+        let loaded = r.wait_until(3000, |ws, cx| ws.history_open && matches!(ws.git.read(cx).commit_details, Some(Ok(_)))).await;
+        let result: Result<String, String> = async {
+            loaded.ok_or("details not loaded")?;
+            r.next_frame().await;
+            r.next_frame().await;
+            // Not pushed: no link to the remote, flagged as local only.
+            let (local_note, link) = r.read(|ws, cx| {
+                let rows = &ws.git.read(cx).history_rows;
+                (
+                    rows.iter().any(|row| matches!(row, HRow::Band(crate::panels::git::BandRow::Note(n)) if n.starts_with("Only local"))),
+                    rows.iter().any(|row| matches!(row, HRow::Band(crate::panels::git::BandRow::Link(_)))),
+                )
+            });
+            ensure!(local_note && !link, "unpushed commit: local-only note {local_note}, link {link}");
+            let f = r.read(|ws, cx| {
+                let g = ws.git.read(cx);
+                g.commit_details.as_ref()?.as_ref().ok()?.files.iter().position(|file| file.diff.path == Path::new("big.txt"))
+            }).ok_or("big.txt not in the commit")?;
+            let header = r.read(move |ws, cx| ws.git.read(cx).file_header_bounds.borrow().get(&f).copied()).ok_or("file header not painted")?;
+            r.click_at(header.center(), 1, Modifiers::default());
+            r.next_frame().await;
+            let lines = r.read(|ws, cx| ws.git.read(cx).history_rows.iter().filter(|row| matches!(row, HRow::Line(..))).count());
+            ensure!(lines >= 300, "after opening big.txt: {lines} diff lines");
+            // Scroll well into the file: its header stays pinned on top.
+            r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: header.center(), pressed_button: None, modifiers: Modifiers::default() }));
+            r.mouse(PlatformInput::Scroll(ScrollEvent {
+                position: header.center(),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-60. * crate::theme::ROW_HEIGHT))),
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
+            }));
+            r.next_frame().await;
+            r.next_frame().await;
+            let sticky = r.read(|ws, cx| ws.git.read(cx).sticky_bounds.get());
+            r.shot("GH3-sticky-file");
+            let (sf, sb) = sticky.ok_or("no pinned header after scrolling into the file")?;
+            ensure!(sf == f, "pinned file {sf}, expected {f}");
+            // A click on the pinned header closes the file; its header is back on top.
+            r.click_at(sb.center(), 1, Modifiers::default());
+            r.next_frame().await;
+            r.next_frame().await;
+            let (open, lines, sticky, top, row) = r.read(move |ws, cx| {
+                let g = ws.git.read(cx);
+                let row = g.history_rows.iter().position(|r| *r == HRow::File(f));
+                let top = g.file_header_bounds.borrow().get(&f).map(|b| b.origin.y);
+                (g.open_files.contains(&f), g.history_rows.iter().filter(|row| matches!(row, HRow::Line(..))).count(), g.sticky_bounds.get(), top, row)
+            });
+            ensure!(!open && lines == 0, "file still open ({lines} lines)");
+            ensure!(sticky.is_none(), "header still pinned after closing");
+            ensure!(top.is_some() && row.is_some(), "the closed file's header is out of view");
+            Ok(format!("cabecera fija en scroll; cerrado desde ella (fila {row:?})"))
+        }
+        .await;
+        r.key("escape");
+        git(&["reset", "-q", "--hard", "HEAD~1"]);
+        r.wait_until(5000, |ws, cx| ws.git.read(cx).log.first().is_some_and(|c| c.summary != "big diff")).await;
+        result
     });
 
     case!(r, "Gi5", "Revertir un commit pusheado (confirmación + push)", {

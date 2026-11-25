@@ -40,8 +40,17 @@ fn commit_details_diff_against_first_parent() {
     let head = git(d, &["rev-parse", "HEAD"]);
     git(d, &["remote", "add", "origin", "git@github.com:me/proj.git"]);
 
+    // Not pushed yet: no page on the remote.
     let repo = GitRepo::open(d).unwrap();
+    let local = repo.commit_details(&head, 3, 10_000).unwrap();
+    assert!(!local.on_remote);
+    assert_eq!(local.web_url, None);
+    // Once a remote-tracking branch contains it (here: its parent's branch
+    // moved to it), it links to the remote.
+    git(d, &["update-ref", "refs/remotes/origin/main", &head]);
     let c = repo.commit_details(&head, 3, 10_000).unwrap();
+    assert!(c.on_remote);
+    assert!(repo.commit_details(&root, 3, 10_000).unwrap().on_remote, "an ancestor of a remote branch is on the remote");
     assert_eq!(c.sha, head);
     assert_eq!(c.message, "second\n\nA body line.\nAnother one.");
     assert_eq!((c.author_name.as_str(), c.author_email.as_str()), ("Ana Pérez", "ana@example.com"));
