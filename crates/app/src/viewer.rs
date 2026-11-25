@@ -268,6 +268,13 @@ impl FileViewer {
         }
     }
 
+    /// Text selected in the editor, if any.
+    pub fn selected_text(&self, cx: &App) -> Option<String> {
+        let e = self.editor.read(cx);
+        let range = e.selected_range();
+        (self.state == ViewerState::Text && !range.is_empty()).then(|| e.text().slice(range).to_string())
+    }
+
     /// Selects `lines` (0-based, end inclusive) like a user would (e2e).
     #[cfg(feature = "e2e")]
     pub(crate) fn select_lines(&mut self, lines: std::ops::RangeInclusive<u32>, cx: &mut Context<Self>) {

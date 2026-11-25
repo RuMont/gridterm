@@ -1212,7 +1212,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok(format!("{d:?}"))
     });
 
-    case!(r, "S4", "⌘P abre paleta flotante; Esc cierra y devuelve foco; ↩ inserta y cierra", {
+    case!(r, "S4", "⌘P abre paleta flotante; Esc cierra y devuelve foco", {
         r.key("cmd-1");
         r.with(|ws, w, cx| {
             ws.sidebar_visible = false;
@@ -1250,6 +1250,33 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         ensure!(ok.is_some(), "⌥↩ did not cd");
         r.run("cd ..");
         Ok("ok".into())
+    });
+
+    case!(r, "S8", "↩ en la paleta abre el archivo como pestaña de la celda activa (no inserta la ruta)", {
+        r.key("cmd-1");
+        r.run("clear");
+        r.sleep(200).await;
+        r.key("cmd-p");
+        r.with(|ws, w, cx| ws.search.update(cx, |s, cx| {
+            s.input.update(cx, |i, cx| i.set_value("guide", w, cx));
+            s.apply_query(cx);
+        }));
+        r.wait_until(2000, |ws, cx| ws.search.read(cx).hits.first().is_some_and(|h| h.rel_path == "docs/guide.md")).await.ok_or("no hit")?;
+        r.key("enter");
+        let guide = repo.join("docs/guide.md");
+        let g = guide.clone();
+        let ok = r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 0, &g)).await;
+        let (palette, tabs) = r.read(|ws, cx| (ws.palette_open, cell_tabs(ws, cx, 0)));
+        let in_viewer = r.focus_in_viewer(0);
+        let screen = r.term_text(0);
+        r.close_all_tabs();
+        r.key("cmd-1");
+        ensure!(ok.is_some(), "not opened as a tab: {tabs:?}");
+        ensure!(tabs == (vec![(guide.clone(), false)], Some(0)), "tabs {tabs:?}");
+        ensure!(!palette, "palette still open");
+        ensure!(in_viewer, "focus not in the opened file");
+        ensure!(!screen.contains("guide.md"), "path was inserted in the terminal:\n{screen}");
+        Ok("pestaña fijada, foco en el archivo".into())
     });
 
     // ---------------------------------------------------------------- git --
@@ -3453,6 +3480,46 @@ async fn debounce_cases(r: &mut Runner<'_>, fx: &Fixture) {
         let d = started.ok_or_else(|| format!("after ↩ the search query is {q:?}"))?;
         ensure!(d < Duration::from_millis(100), "started after {d:?}");
         Ok(format!("arrancó a los {d:?} (sondeo cada 20 ms)"))
+    });
+
+    case!(r, "D6", "⇧⌘F con texto seleccionado en la terminal lo busca", {
+        clear_content(r);
+        r.key("cmd-1");
+        r.run("clear; echo needle_sel_x9 rest");
+        r.sleep(400).await;
+        let pos = r.find_in_terminal(0, "needle_sel_x9").ok_or("word not on screen")?;
+        r.double_click_at(pos);
+        r.sleep(100).await;
+        let sel = r.read(|ws, cx| ws.terminals[0].read(cx).selection_text());
+        ensure!(sel.as_deref() == Some("needle_sel_x9"), "double click selected {sel:?}");
+        r.key("cmd-shift-f");
+        let started = r.wait_until(1000, |ws, cx| ws.explorer.read(cx).search.query == "needle_sel_x9").await;
+        let (input, focused) = r.read(|ws, cx| (ws.explorer.read(cx).query.read(cx).value().to_string(), ws.panel == Panel::Explorer && ws.sidebar_visible));
+        let d = started.ok_or_else(|| format!("query input {input:?}"))?;
+        ensure!(focused, "explorer not shown");
+        ensure!(r.focused_terminal().is_none(), "focus stayed in the terminal");
+        Ok(format!("buscó {input:?} a los {d:?}"))
+    });
+
+    case!(r, "D7", "⇧⌘F sin selección (o de varias líneas) no cambia la consulta", {
+        clear_content(r);
+        r.with(|ws, w, cx| ws.explorer.update(cx, |e, cx| e.query.update(cx, |i, cx| i.set_value("keep_me", w, cx))));
+        r.key("cmd-1");
+        r.run("clear; printf 'aaaa1111\\nbbbb2222\\n'");
+        r.sleep(400).await;
+        let a = r.find_in_terminal(0, "aaaa1111").ok_or("first line not on screen")?;
+        let b = r.find_in_terminal(0, "bbbb2222").ok_or("second line not on screen")?;
+        r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: a, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }));
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: b, pressed_button: Some(MouseButton::Left), modifiers: Modifiers::default() }));
+        r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: b, modifiers: Modifiers::default(), click_count: 1 }));
+        r.sleep(100).await;
+        let sel = r.read(|ws, cx| ws.terminals[0].read(cx).selection_text());
+        r.key("cmd-shift-f");
+        r.sleep(100).await;
+        let input = r.read(|ws, cx| ws.explorer.read(cx).query.read(cx).value().to_string());
+        ensure!(sel.as_deref().is_some_and(|s| s.contains('\n')), "drag selected {sel:?}");
+        ensure!(input == "keep_me", "multi-line selection replaced the query with {input:?}");
+        Ok("ok".into())
     });
 
     clear_content(r);

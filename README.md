@@ -39,9 +39,9 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | ⌘C / ⌘V / ⌘K | Copiar selección / pegar / limpiar (en una terminal) |
 | ⇧PgUp / ⇧PgDn, ⌘Home / ⌘End | Scroll del historial |
 
-En la paleta de File Search: ↩ inserta la ruta en la terminal activa, ⇧↩ abre el archivo como pestaña, ⌥↩ hace `cd` a su carpeta, ⌘↩ la muestra en el Explorer, ⌘⇧C copia la ruta y Esc (o un clic fuera) cierra la paleta.
+En la paleta de File Search: ↩ (o doble clic) abre el archivo como pestaña de la celda activa, ⇧↩ inserta la ruta en la terminal activa, ⌥↩ hace `cd` a su carpeta, ⌘↩ la muestra en el Explorer, ⌘⇧C copia la ruta y Esc (o un clic fuera) cierra la paleta.
 
-En el Explorer: clic en un archivo = vista previa (pestaña en cursiva que el siguiente clic reemplaza; el foco se queda en el Explorer), doble clic = pestaña fijada. Con teclado: Espacio previsualiza, ↩ abre, ⌥↩ inserta la ruta en la terminal. Clic en una línea de la búsqueda por contenido abre el archivo en esa línea. Las acciones de cada fila son: insertar la ruta, `cd` a la carpeta, copiar la ruta y mostrar en Finder.
+En el Explorer: clic en un archivo = vista previa (pestaña en cursiva que el siguiente clic reemplaza; el foco se queda en el Explorer), doble clic = pestaña fijada. Con teclado: Espacio previsualiza, ↩ abre, ⌥↩ inserta la ruta en la terminal. Clic en una línea de la búsqueda por contenido abre el archivo en esa línea. Si al pulsar ⇧⌘F hay texto seleccionado (en la terminal o en un archivo) y cabe en una línea, se busca directamente. Las acciones de cada fila son: insertar la ruta, `cd` a la carpeta, copiar la ruta y mostrar en Finder.
 
 ## Configuración
 

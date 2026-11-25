@@ -1108,6 +1108,19 @@ impl Workspace {
         }
     }
 
+    /// ⌘⇧F: search in files, seeded with the active cell's selection (one
+    /// line, as in VS Code) when there is one.
+    fn show_content_search(&mut self, _: &ShowContentSearch, window: &mut Window, cx: &mut Context<Self>) {
+        let seed = self.active_cell().and_then(|c| c.read(cx).selected_text(cx)).and_then(|t| content_search_seed(&t));
+        self.sidebar_visible = true;
+        self.panel = Panel::Explorer;
+        self.explorer.update(cx, |e, cx| match seed {
+            Some(text) => e.search_for(&text, window, cx),
+            None => e.focus_content_search(window, cx),
+        });
+        cx.notify();
+    }
+
     /// File search is "visible" while the palette is open or its sidebar
     /// panel is shown; only then does it index roots.
     fn sync_search_visibility(&mut self, cx: &mut Context<Self>) {
@@ -1846,12 +1859,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ShowExplorer, w, cx| this.show_panel(Panel::Explorer, w, cx)))
             .on_action(cx.listener(|this, _: &ShowSearch, w, cx| this.toggle_palette(w, cx)))
             .on_action(cx.listener(|this, _: &ShowSettings, w, cx| this.show_panel(Panel::Settings, w, cx)))
-            .on_action(cx.listener(|this, _: &ShowContentSearch, w, cx| {
-                this.sidebar_visible = true;
-                this.panel = Panel::Explorer;
-                this.explorer.update(cx, |e, cx| e.focus_content_search(w, cx));
-                cx.notify();
-            }))
+            .on_action(cx.listener(Self::show_content_search))
             .child(
                 div()
                     .flex()
@@ -1929,6 +1937,14 @@ pub fn square_corners(cx: &mut App) {
     theme.shadow = false;
 }
 
+/// Query taken from a selection for ⌘⇧F: its text without surrounding
+/// whitespace, only if it fits on one line (the terminal pads rows with
+/// spaces and ends a selection that reaches the line end with a newline).
+fn content_search_seed(selection: &str) -> Option<String> {
+    let text = selection.trim();
+    (!text.is_empty() && !text.contains('\n')).then(|| text.to_string())
+}
+
 /// `get_selection` result: 1-based, inclusive lines for the model.
 fn selection_json(sel: &agents::ide::Selection) -> serde_json::Value {
     let Some(file) = &sel.file_path else { return serde_json::json!({ "file": null }) };
@@ -1960,6 +1976,16 @@ pub fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::shell_quote;
+
+    #[test]
+    fn content_search_seed_takes_one_line_selections() {
+        assert_eq!(super::content_search_seed("needle").as_deref(), Some("needle"));
+        // Terminal selections: row padding and a trailing newline are not part of it.
+        assert_eq!(super::content_search_seed("  fn main  \n").as_deref(), Some("fn main"));
+        assert_eq!(super::content_search_seed("aaaa1111\nbbbb2222"), None);
+        assert_eq!(super::content_search_seed(" \n "), None);
+        assert_eq!(super::content_search_seed(""), None);
+    }
 
     #[test]
     fn repo_root_detection() {

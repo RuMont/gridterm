@@ -200,20 +200,20 @@ impl SearchPanel {
         cx.notify();
     }
 
-    /// Enter inserts the path in the active terminal; ⌘Enter reveals it in the explorer.
+    /// ↩ opens the hit as a pinned tab of the active cell (a folder is
+    /// revealed in the explorer); ⌘↩ reveals it in the explorer.
     pub(crate) fn open_selected(&mut self, reveal: bool, cx: &mut Context<Self>) {
         self.flush_query(cx);
         if let Some(hit) = self.hits.get(self.selected) {
-            let path = hit.abs_path.clone();
-            cx.emit(if reveal { PanelEvent::RevealInExplorer(path) } else { PanelEvent::InsertPath(path) });
+            cx.emit(open_event(hit.abs_path.clone(), reveal));
         }
     }
 
-    /// ⇧↩: open the hit as a pinned tab of the active terminal.
-    pub(crate) fn open_selected_as_tab(&mut self, cx: &mut Context<Self>) {
+    /// ⇧↩: insert the hit's path in the active terminal.
+    pub(crate) fn insert_selected(&mut self, cx: &mut Context<Self>) {
         self.flush_query(cx);
-        if let Some(hit) = self.hits.get(self.selected).filter(|h| h.abs_path.is_file()) {
-            cx.emit(PanelEvent::OpenFile { path: hit.abs_path.clone(), line: None, preview: false });
+        if let Some(hit) = self.hits.get(self.selected) {
+            cx.emit(PanelEvent::InsertPath(hit.abs_path.clone()));
         }
     }
 
@@ -250,7 +250,7 @@ impl SearchPanel {
         let m = &event.keystroke.modifiers;
         match event.keystroke.key.as_str() {
             "enter" if m.alt => self.cd_selected(cx),
-            "enter" if m.shift => self.open_selected_as_tab(cx),
+            "enter" if m.shift => self.insert_selected(cx),
             "c" if m.platform && m.shift => self.copy_selected(cx),
             "down" => self.move_selection(1, cx),
             "up" => self.move_selection(-1, cx),
@@ -290,7 +290,7 @@ impl SearchPanel {
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                 this.selected = ix;
                 if e.click_count() >= 2 {
-                    cx.emit(PanelEvent::InsertPath(path.clone()));
+                    cx.emit(open_event(path.clone(), false));
                 }
                 cx.notify();
             }))
@@ -351,6 +351,16 @@ impl SearchPanel {
     }
 }
 
+/// Opening a hit: a file becomes a pinned tab, anything else (or ⌘↩) is
+/// revealed in the explorer.
+fn open_event(path: PathBuf, reveal: bool) -> PanelEvent {
+    if reveal || !path.is_file() {
+        PanelEvent::RevealInExplorer(path)
+    } else {
+        PanelEvent::OpenFile { path, line: None, preview: false }
+    }
+}
+
 impl Render for SearchPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (indexed, matched, indexing) = self
@@ -385,7 +395,7 @@ impl Render for SearchPanel {
                     .text_color(rgb(theme::overlay0()))
                     .child(status)
                     .child(div().flex_1())
-                    .child("↩ insert · ⌥↩ cd · ⌘↩ reveal · ⌘⇧C copy"),
+                    .child("↩ open · ⇧↩ insert · ⌥↩ cd · ⌘↩ reveal · ⌘⇧C copy"),
             )
             .child(if self.indexes.is_empty() {
                 empty_state("Focus a terminal to search its project.").into_any_element()

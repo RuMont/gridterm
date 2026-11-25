@@ -202,6 +202,17 @@ impl ExplorerPanel {
         self.query.update(cx, |q, cx| q.focus(window, cx));
     }
 
+    /// ⌘⇧F with text selected: searches for it right away, with the query
+    /// selected so typing replaces it.
+    pub fn search_for(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.query.update(cx, |q, cx| {
+            q.set_value(text.to_string(), window, cx);
+            q.focus(window, cx);
+            q.set_selected_range(0..text.len(), cx);
+        });
+        self.schedule_search(Duration::ZERO, cx);
+    }
+
     /// Expands every ancestor of `path` and selects it once loaded.
     pub fn reveal(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else { return };

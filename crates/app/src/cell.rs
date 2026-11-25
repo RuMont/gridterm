@@ -252,6 +252,14 @@ impl CellView {
         }
     }
 
+    /// Text selected in what is visible: the file viewer or the terminal.
+    pub fn selected_text(&self, cx: &App) -> Option<String> {
+        match self.visible_viewer() {
+            Some(v) => v.read(cx).selected_text(cx),
+            None => self.terminal.read(cx).selection_text(),
+        }
+    }
+
     /// Focuses what is visible: the terminal or the file viewer.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self.visible_viewer().cloned() {
