@@ -1279,6 +1279,36 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok("pestaña fijada, foco en el archivo".into())
     });
 
+    case!(r, "GD1", "F12 / ⌘clic en un símbolo importado abre su declaración en otra pestaña de la celda", {
+        r.key("cmd-1");
+        let app = repo.join("web/app.ts");
+        let user = repo.join("web/models/user.ts");
+        write(&user, "// users\n\nexport interface User {\n  id: string;\n}\n");
+        write(&app, "import { User } from './models/user';\n\nconst u: User = { id: '1' };\n");
+        r.open_in(0, &app, None, false);
+        let a = app.clone();
+        r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 0, &a)).await.ok_or("app.ts not loaded")?;
+        let viewer = r.read(|ws, cx| visible_viewer(ws, cx, 0)).ok_or("no viewer")?;
+        let ok = r.app({
+            let viewer = viewer.clone();
+            move |w, cx| viewer.update(cx, |v, cx| v.cursor_at("User = ", w, cx))
+        });
+        ensure!(ok, "symbol not found in the viewer");
+        r.next_frame().await;
+        r.key("f12");
+        let u = user.clone();
+        let opened = r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 0, &u)).await;
+        let tabs = r.read(|ws, cx| cell_tabs(ws, cx, 0));
+        let line = r.read(|ws, cx| visible_viewer(ws, cx, 0).map(|v| v.read(cx).cursor_line(cx)));
+        r.close_all_tabs();
+        r.key("cmd-1");
+        std::fs::remove_dir_all(repo.join("web")).ok();
+        let d = opened.ok_or_else(|| format!("declaration not opened: {tabs:?}"))?;
+        ensure!(tabs.0 == vec![(app.clone(), false), (user.clone(), false)] && tabs.1 == Some(1), "tabs {tabs:?}");
+        ensure!(line == Some(2), "cursor line {line:?}, expected 2 (interface User)");
+        Ok(format!("user.ts:3 abierto en {d:?}"))
+    });
+
     // ---------------------------------------------------------------- git --
     r.key("cmd-1");
     r.with(|ws, w, cx| ws.show_panel(Panel::Git, w, cx));

@@ -4,13 +4,15 @@
 //! numbers, ⌘F search, syntect highlighting picked by file extension). Files
 //! are read off the UI thread; binaries, huge files and missing files show a
 //! notice instead. The file is watched and reloaded when it changes on disk.
+//! ⌘click on a symbol opens its declaration (see `crate::definition`).
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
 use fs_tools::watch::FileWatcher;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::input::{Editor, EditorState, Position, RopeExt as _};
+use gpui_kit::component::input::{DefinitionProvider, Editor, EditorState, Position, Rope, RopeExt as _};
 use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -136,6 +138,32 @@ pub enum ViewerEvent {
     Focused,
     /// The selection or cursor moved (what an agent sees changed).
     SelectionChanged,
+    /// ⌘click on a symbol: open its declaration (1-based line).
+    OpenDefinition { path: PathBuf, line: u32 },
+}
+
+/// Resolves ⌘hover / ⌘click definitions off the UI thread.
+struct Definitions {
+    path: PathBuf,
+}
+
+impl DefinitionProvider for Definitions {
+    fn definitions(&self, text: &Rope, offset: usize, _: &mut Window, cx: &mut App) -> Task<anyhow::Result<Vec<lsp_types::LocationLink>>> {
+        let path = self.path.clone();
+        let content = text.to_string();
+        let origin = crate::definition::word_at(&content, offset)
+            .map(|r| lsp_types::Range::new(text.offset_to_position(r.start), text.offset_to_position(r.end)));
+        cx.background_executor().spawn(async move {
+            let Some(target) = crate::definition::find(&path, &content, offset) else { return Ok(vec![]) };
+            let at = lsp_types::Range::new(lsp_types::Position::new(target.line, 0), lsp_types::Position::new(target.line, 0));
+            Ok(vec![lsp_types::LocationLink {
+                origin_selection_range: origin,
+                target_uri: crate::definition::file_uri(&target.path).parse()?,
+                target_range: at,
+                target_selection_range: at,
+            }])
+        })
+    }
 }
 
 /// Most selected text sent to an agent (the rest is cut).
@@ -174,11 +202,23 @@ impl Focusable for FileViewer {
 impl FileViewer {
     pub fn new(path: PathBuf, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let language = language_for(&path);
+        let viewer = cx.weak_entity();
         let editor = cx.new(|cx| {
             let mut e = EditorState::new(window, cx).language(language).soft_wrap(false).folding(false);
             e.set_readonly(true, cx);
             // Parse off the UI thread (the default parses ≤ 64 KB inline).
             e.set_highlighter_factory(crate::highlight::factory(), cx);
+            e.lsp_mut().definition_provider = Some(Rc::new(Definitions { path: path.clone() }));
+            e.lsp_mut().show_document = Some(Rc::new(move |params, _, cx| {
+                let Some(target) = crate::definition::path_from_uri(params.uri.as_str()) else { return false };
+                let line = params.selection.map_or(0, |r| r.start.line) + 1;
+                // The editor is being updated: open the tab once it is done.
+                let viewer = viewer.clone();
+                cx.defer(move |cx| {
+                    let _ = viewer.update(cx, |_, cx| cx.emit(ViewerEvent::OpenDefinition { path: target, line }));
+                });
+                true
+            }));
             e
         });
         let focus_handle = cx.focus_handle();
@@ -273,6 +313,19 @@ impl FileViewer {
         let e = self.editor.read(cx);
         let range = e.selected_range();
         (self.state == ViewerState::Text && !range.is_empty()).then(|| e.text().slice(range).to_string())
+    }
+
+    /// Puts the cursor on the first `needle` and focuses the editor (e2e).
+    #[cfg(feature = "e2e")]
+    pub(crate) fn cursor_at(&mut self, needle: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.editor.update(cx, |e, cx| {
+            let text = e.text().to_string();
+            let Some(offset) = text.find(needle) else { return false };
+            let pos = e.text().offset_to_position(offset + 1);
+            e.set_cursor_position(pos, window, cx);
+            e.focus(window, cx);
+            true
+        })
     }
 
     /// Selects `lines` (0-based, end inclusive) like a user would (e2e).

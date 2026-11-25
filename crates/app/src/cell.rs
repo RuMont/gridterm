@@ -22,6 +22,8 @@ pub enum CellEvent {
     Focused,
     /// What an agent in this cell sees changed (shown file or selection).
     ViewChanged,
+    /// Open a file of this cell at a 1-based line (go to definition).
+    OpenFile { path: PathBuf, line: u32 },
 }
 
 /// Selection moves are reported to agents after this quiet period.
@@ -149,6 +151,7 @@ impl CellView {
         let viewer = cx.new(|cx| FileViewer::new(path, line, window, cx));
         let sub = cx.subscribe(&viewer, |this, viewer, event: &ViewerEvent, cx| match event {
             ViewerEvent::Focused => cx.emit(CellEvent::Focused),
+            ViewerEvent::OpenDefinition { path, line } => cx.emit(CellEvent::OpenFile { path: path.clone(), line: *line }),
             ViewerEvent::SelectionChanged => {
                 if this.last_viewed.as_ref() == Some(&viewer) {
                     this.view_task = Some(cx.spawn(async move |this, cx| {

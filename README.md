@@ -26,6 +26,7 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | ⌘W | Cerrar la pestaña de archivo visible; si se ve la terminal, cerrarla (con sus archivos) |
 | ⌘⇧] / ⌘⇧[ | Pestaña siguiente / anterior de la celda activa |
 | Esc (en un archivo) | Volver a la pestaña de la terminal |
+| ⌘ + clic o F12 sobre un símbolo (en un archivo) | Ir a su declaración: sigue el `import`/`use` hasta el archivo (TS/JS y Rust, con alias de `tsconfig`, `node_modules` y re-exportaciones); si no, la busca en el mismo archivo y luego en el proyecto. Con ⌘ pulsado el símbolo se subraya |
 | ⌘1…⌘9 | Enfocar la terminal N |
 | ⌘⌥←↑→↓ | Mover el foco por el grid |
 | ⌘⇧↩ | Zoom de la terminal activa |

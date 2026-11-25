@@ -3063,6 +3063,8 @@ dependencies = [
  "layout",
  "libc",
  "log",
+ "lsp-types",
+ "regex",
  "serde",
  "serde_json",
  "syntect",

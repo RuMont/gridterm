@@ -919,6 +919,10 @@ impl Workspace {
                 let id = self.terminals[index].read(cx).id();
                 self.push_agent_view(id, cx);
             }
+            CellEvent::OpenFile { path, line } => {
+                let path = path.clone();
+                self.open_file_in(index, &path, Some(*line), false, window, cx);
+            }
         }
     }
 
