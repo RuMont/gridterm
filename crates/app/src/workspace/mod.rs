@@ -82,6 +82,9 @@ pub(crate) enum PickerStub {
     Queue(std::collections::VecDeque<Option<PathBuf>>),
     /// Never answers: the picker stays "open".
     Hold,
+    /// The real Finder picker: an e2e build used as an app (no
+    /// `GRIDTERM_E2E`) must behave like the app.
+    Native,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,6 +251,7 @@ impl Workspace {
             picker_requests: 0,
             #[cfg(feature = "e2e")]
             picker: match std::env::var("GRIDTERM_E2E_PICKER").as_deref() {
+                _ if std::env::var_os("GRIDTERM_E2E").is_none() => PickerStub::Native,
                 Ok("cancel") => PickerStub::Queue(Default::default()),
                 _ => PickerStub::Auto,
             },
@@ -771,10 +775,12 @@ impl Workspace {
                     self.picker_pending = true;
                     cx.notify();
                 }
+                PickerStub::Native => {}
             }
-            return;
+            if !matches!(self.picker, PickerStub::Native) {
+                return;
+            }
         }
-        #[allow(unreachable_code)]
         {
             self.picker_pending = true;
             cx.notify();
