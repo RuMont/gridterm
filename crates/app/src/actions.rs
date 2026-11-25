@@ -87,6 +87,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", ShowTerminalTab, Some(crate::viewer::VIEWER_CONTEXT)),
         KeyBinding::new("alt-cmd-k", SendToAgent, Some(crate::viewer::VIEWER_CONTEXT)),
         KeyBinding::new("f12", gpui_kit::component::input::GoToDefinition, Some(crate::viewer::VIEWER_CONTEXT)),
+        // gpui-kit's Root binds tab/shift-tab to moving focus. In a terminal
+        // they belong to the program (completion, Claude Code's mode switch):
+        // unbinding them here lets the key reach the terminal's key handler.
+        KeyBinding::new("tab", gpui_kit::NoAction, t),
+        KeyBinding::new("shift-tab", gpui_kit::NoAction, t),
         KeyBinding::new("cmd-c", term::Copy, t),
         KeyBinding::new("cmd-v", term::Paste, t),
         KeyBinding::new("cmd-k", term::Clear, t),

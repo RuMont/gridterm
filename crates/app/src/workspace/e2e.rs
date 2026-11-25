@@ -486,6 +486,8 @@ pub fn start(window: &mut Window, cx: &mut Context<Workspace>) {
             u6_heavy_search(&mut r, &base, &home).await;
         } else if phase == "restore" {
             restore_phase(&mut r).await;
+        } else if phase == "empty" {
+            empty_phase(&mut r).await;
         } else if phase == "claude" {
             let fixture = Fixture::create(out.join("fixture"));
             claude_cases(&mut r, &fixture).await;
@@ -541,6 +543,32 @@ pub fn start(window: &mut Window, cx: &mut Context<Workspace>) {
         r.app(|_, cx| cx.quit());
     })
     .detach();
+}
+
+/// The grid emptied: closing the last cell leaves no focus and no context.
+async fn empty_phase(r: &mut Runner<'_>) {
+    case!(r, "E0", "Al cerrar la última celda no queda foco ni contexto en ella", {
+        let dir = std::env::temp_dir();
+        if r.n_terms() == 0 {
+            let d = dir.clone();
+            r.with(move |ws, w, cx| ws.open_terminal_in(Some(d), w, cx));
+        }
+        r.wait_until(3000, |ws, cx| ws.context.terminal_id.is_some() && ws.terminals.first().is_some_and(|t| t.read(cx).cwd().is_some())).await.ok_or("no context before closing")?;
+        // Close every cell (⌘W on each, as a user would).
+        while r.n_terms() > 0 {
+            r.key("cmd-1");
+            r.key("cmd-w");
+            r.sleep(300).await;
+        }
+        r.next_frame().await;
+        r.shot("E0-empty");
+        let (active, ctx, root, repo) = r.read(|ws, cx| (ws.active, ws.context.clone(), ws.explorer.read(cx).root.clone(), ws.git.read(cx).repo.as_ref().map(|r| r.root().to_path_buf())));
+        let focus = r.focused_terminal();
+        ensure!(active.is_none() && focus.is_none(), "active {active:?}, focused terminal {focus:?}");
+        ensure!(ctx == super::ActiveContext::default(), "context still points at the closed cell: {ctx:?}");
+        ensure!(root.is_none() && repo.is_none(), "tools still on it: explorer {root:?}, git {repo:?}");
+        Ok("sin celda activa, sin foco, sin contexto".into())
+    });
 }
 
 async fn restore_phase(r: &mut Runner<'_>) {
@@ -1501,6 +1529,21 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok("el programa recibió 0x16".into())
     });
 
+    case!(r, "CC3", "Tab y ⇧Tab llegan al programa (modos de Claude Code) y no mueven el foco", {
+        r.key("cmd-1");
+        r.run("clear; stty raw -echo; head -c 4 | od -An -tx1; stty sane");
+        r.sleep(500).await;
+        r.key("shift-tab");
+        r.key("tab");
+        let focused = r.focused_terminal();
+        let got = r.wait_until(3000, |ws, cx| ws.terminals[0].read(cx).visible_text().lines().any(|l| l.split_whitespace().eq(["1b", "5b", "5a", "09"]))).await;
+        let screen = r.term_text(0);
+        r.run("clear");
+        ensure!(focused == Some(0), "focus moved to {focused:?}");
+        got.ok_or_else(|| format!("the program did not get ESC [ Z + TAB:\n{screen}"))?;
+        Ok("el programa recibió 1b 5b 5a 09; el foco sigue en la terminal".into())
+    });
+
     // ---------------------------------------------------------------- git --
     r.key("cmd-1");
     r.with(|ws, w, cx| ws.show_panel(Panel::Git, w, cx));
@@ -1822,6 +1865,38 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         result
     });
 
+    case!(r, "GH5", "Clic derecho en un archivo del historial → «Open file»: se abre en la celda y la ventana se cierra", {
+        let sha = r.read(|ws, cx| ws.git.read(cx).log.iter().find(|c| c.summary == "fixture files").map(|c| c.sha.clone())).ok_or("fixture commit not in the log")?;
+        r.with(move |ws, _, cx| ws.git.update(cx, |g, cx| g.open_history_at(sha, cx)));
+        r.wait_until(3000, |ws, cx| ws.history_open && matches!(ws.git.read(cx).commit_details, Some(Ok(_)))).await.ok_or("details not loaded")?;
+        r.next_frame().await;
+        r.next_frame().await;
+        let (header, file) = r.read(|ws, cx| {
+            let g = ws.git.read(cx);
+            let file = g.commit_details.as_ref()?.as_ref().ok()?.files.first()?.diff.path.clone();
+            Some((g.file_header_bounds.borrow().get(&0).copied()?, file))
+        }).ok_or("first file header not painted")?;
+        let at = header.center();
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: at, pressed_button: None, modifiers: Modifiers::default() }));
+        r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Right, position: at, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }));
+        r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Right, position: at, modifiers: Modifiers::default(), click_count: 1 }));
+        r.sleep(200).await;
+        r.shot("GH5-file-menu");
+        r.key("down");
+        r.key("enter");
+        let target = repo.join(&file);
+        let t = target.clone();
+        let opened = r.wait_until(3000, move |ws, cx| !ws.history_open && viewer_loaded(ws, cx, 0, &t)).await;
+        let (open, tabs) = r.read(|ws, cx| (ws.history_open, cell_tabs(ws, cx, 0)));
+        if open {
+            r.key("escape");
+        }
+        r.close_all_tabs();
+        r.key("cmd-1");
+        opened.ok_or_else(|| format!("{} not opened (window open {open}, tabs {tabs:?})", target.display()))?;
+        Ok(format!("{} abierto; ventana cerrada", file.display()))
+    });
+
     case!(r, "GG1", "Marcas de git junto a los números de línea: añadidas, modificadas y borradas; desaparecen al hacer commit", {
         use git_client::{LineChange, LineChangeKind::*};
         let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().map(|o| o.status.success()).unwrap_or(false);
@@ -2062,6 +2137,38 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         }
         ensure!(failures.is_empty(), "Esc did not return to terminal from {failures:?}");
         Ok("ok".into())
+    });
+
+    case!(r, "U7", "Tab/⇧Tab dentro del sidebar no salen de él (las celdas van con ⌘1…9)", {
+        r.key("cmd-1");
+        // An open file: its editor is a tab stop that Tab could jump into.
+        let file = repo.join("README.md");
+        r.with(move |ws, w, cx| ws.cells[0].update(cx, |c, cx| c.open_file(&file, None, false, w, cx)));
+        r.sleep(300).await;
+        r.with(|ws, w, cx| {
+            ws.sidebar_visible = true;
+            ws.panel = Panel::Search;
+            ws.search.update(cx, |s, cx| s.focus_input(w, cx));
+            cx.notify();
+        });
+        r.sleep(150).await;
+        let in_sidebar = |r: &mut Runner<'_>| {
+            let ws = r.ws.clone();
+            r.app(move |w, cx| ws.read(cx).sidebar_focus.contains_focused(w, cx))
+        };
+        let mut escaped = Vec::new();
+        for (i, key) in ["tab"; 6].into_iter().chain(["shift-tab"; 6]).enumerate() {
+            r.key(key);
+            r.sleep(30).await;
+            if !in_sidebar(r) {
+                escaped.push(format!("{key} #{i}"));
+            }
+        }
+        r.with(|ws, _, cx| ws.cells[0].update(cx, |c, cx| c.close_tab(0, cx)));
+        r.key("escape");
+        r.sleep(100).await;
+        ensure!(escaped.is_empty(), "focus left the sidebar after {escaped:?}");
+        Ok("12 pulsaciones, el foco sigue en el sidebar".into())
     });
 
     u6_heavy_search(r, &fx.base, &repo_s).await;

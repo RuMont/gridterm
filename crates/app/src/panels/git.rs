@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -1331,7 +1331,7 @@ impl Render for GitPanel {
         self.chip_bounds.borrow_mut().clear();
         self.file_header_bounds.borrow_mut().clear();
         if self.repo.is_none() {
-            return div().flex().flex_col().flex_1().child(empty_state("The active terminal is not inside a git repository.")).into_any_element();
+            return div().flex().flex_col().flex_1().child(empty_state("No git repository here: the active terminal is outside one, or there is no terminal.")).into_any_element();
         }
         let Some(status) = self.status.clone() else {
             return div().flex().flex_col().flex_1().child(empty_state(self.error.clone().unwrap_or_else(|| "Loading…".into()))).into_any_element();
@@ -1535,6 +1535,10 @@ impl GitPanel {
                     LineKind::Context => (" ", theme::subtext(), None),
                 };
                 let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
+                // The line in today's file: a removed line opens where its
+                // hunk lands.
+                let at = line.new_lineno.or_else(|| details.and_then(|d| d.files.get(f)?.diff.hunks.get(h)).map(|h| h.new_start.max(1)));
+                let menu = self.file_menu(f, at, true, cx);
                 band(("history-line", ix).into())
                     .gap_1()
                     .font_family("Menlo")
@@ -1543,6 +1547,7 @@ impl GitPanel {
                     .child(div().w(px(40.)).flex_none().text_right().text_color(rgb(theme::overlay0())).child(num(line.new_lineno)))
                     .child(div().w(px(12.)).flex_none().text_color(rgb(fg)).child(sign))
                     .child(diff_text(line, self.commit_highlights.get(&f).map(|h| &**h), fg, cx))
+                    .context_menu(menu)
                     .into_any_element()
             }
             HRow::Note(text) => band(("history-note", ix).into()).child(div().italic().text_color(rgb(theme::overlay0())).child(text)).into_any_element(),
@@ -1569,6 +1574,9 @@ impl GitPanel {
             Some(old) => format!("{} → {}", old.display(), file.diff.path.display()),
             None => file.diff.path.display().to_string(),
         };
+        // Right-click: open today's file where the commit's first change is.
+        let first_change = file.diff.hunks.first().map(|h| h.new_start.max(1));
+        let menu = self.file_menu(f, first_change, false, cx);
         div()
             .id(id)
             .w_full()
@@ -1591,7 +1599,45 @@ impl GitPanel {
             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::MEDIUM).text_color(rgb(theme::text())).child(path))
             .child(div().flex_none().text_color(rgb(theme::green())).child(format!("+{}", file.added)))
             .child(div().flex_none().text_color(rgb(theme::red())).child(format!("−{}", file.removed)))
+            .context_menu(menu)
             .into_any_element()
+    }
+
+    /// Context menu of file `f` of the unfolded commit (its header, or one
+    /// of its diff lines with `on_line`): open the file as it is today (at
+    /// `line`), reveal it in the explorer, copy its path.
+    fn file_menu(&self, f: usize, line: Option<u32>, on_line: bool, cx: &mut Context<Self>) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
+        let panel = cx.weak_entity();
+        let path = self
+            .commit_details
+            .as_ref()
+            .and_then(|d| d.as_ref().ok())
+            .and_then(|d| d.files.get(f))
+            .zip(self.repo.as_ref())
+            .map(|(file, repo)| repo.root().join(&file.diff.path));
+        move |menu, _, _| {
+            let Some(path) = path.clone() else { return menu };
+            // A later commit may have removed or renamed it.
+            let exists = path.is_file();
+            let emit = |event: PanelEvent| {
+                let panel = panel.clone();
+                move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                    let _ = panel.update(cx, |_, cx| cx.emit(event.clone()));
+                }
+            };
+            let open_label = match (on_line, line) {
+                (true, Some(n)) => format!("Open at line {n}"),
+                _ => "Open file".to_string(),
+            };
+            let copy = path.display().to_string();
+            let copied = panel.clone();
+            menu.item(PopupMenuItem::new(open_label).icon(IconName::File).disabled(!exists).on_click(emit(PanelEvent::OpenFile { path: path.clone(), line, preview: false })))
+                .item(PopupMenuItem::new("Reveal in Explorer").icon(IconName::FolderTree).disabled(!exists).on_click(emit(PanelEvent::RevealInExplorer(path.clone()))))
+                .item(PopupMenuItem::new("Copy path").icon(IconName::Copy).on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                    let _ = copied.update(cx, |_, cx| cx.emit(PanelEvent::info("Path copied")));
+                }))
+        }
     }
 }
 

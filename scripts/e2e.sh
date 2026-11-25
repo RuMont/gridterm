@@ -95,6 +95,10 @@ rm -f "$CFG/session.toml"
 GRIDTERM_E2E_PICKER=cancel run_app startup 60 || echo "startup phase timed out"
 rm -f "$CFG/session.toml"
 
+echo "== E0 closing the last cell"
+run_app empty 60 || echo "empty phase timed out"
+rm -f "$CFG/session.toml"
+
 echo "== F2 bundle"
 if [[ -x scripts/bundle.sh ]] && scripts/bundle.sh >"$OUT/bundle.log" 2>&1 \
    && [[ -x target/release/bundle/gridterm.app/Contents/MacOS/gridterm ]] \
@@ -122,7 +126,7 @@ rows = []
 def load(name):
     p = os.path.join(out, name)
     return json.load(open(p)) if os.path.exists(p) else []
-for c in load("results.json") + load("results_restore.json") + load("results_startup.json"):
+for c in load("results.json") + load("results_restore.json") + load("results_startup.json") + load("results_empty.json"):
     rows.append((c["id"], c["name"], "PASS" if c["pass"] else "FAIL", c["detail"].replace("\n", " ")[:160], "e2e"))
 for line in open(os.path.join(out, "script_results.tsv")):
     i, n, st, d = line.rstrip("\n").split("\t")

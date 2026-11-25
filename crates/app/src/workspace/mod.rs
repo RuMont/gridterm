@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use config::Config;
 use gpui_kit::assets::IconName;
+use gpui_kit::base::FocusTrapElement as _;
 use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -157,6 +158,9 @@ pub struct Workspace {
     /// Grid reduction waiting for confirmation (dialog shown).
     pub(crate) pending_shrink: Option<PendingShrink>,
     shrink_focus: FocusHandle,
+    /// Container of the sidebar: Tab/⇧Tab cycle inside it instead of jumping
+    /// into the cells (those are reached with ⌘1…9).
+    pub(crate) sidebar_focus: FocusHandle,
     /// Painted bounds of the dialog's Cancel and Close buttons (e2e).
     pub(crate) shrink_buttons: std::rc::Rc<std::cell::Cell<(Bounds<Pixels>, Bounds<Pixels>)>>,
     /// Claude Code IDE integration (`/ide`), when enabled.
@@ -266,6 +270,7 @@ impl Workspace {
             plus_bounds: Default::default(),
             pending_shrink: None,
             shrink_focus: cx.focus_handle(),
+            sidebar_focus: cx.focus_handle(),
             shrink_buttons: Default::default(),
             ide: None,
             ide_conns: Default::default(),
@@ -878,6 +883,7 @@ impl Workspace {
                     None => {
                         self.active = None;
                         window.focus(&self.focus_handle, cx);
+                        self.clear_context(cx);
                         cx.notify();
                     }
                 }
@@ -1111,6 +1117,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// No terminal left: the tools point at nothing (they followed the last
+    /// cell, which is gone), even a pinned context.
+    fn clear_context(&mut self, cx: &mut Context<Self>) {
+        self.context = ActiveContext::default();
+        self.close_history_window(cx);
+        self.git.update(cx, |g, cx| g.set_repo(None, cx));
+        self.explorer.update(cx, |e, cx| e.set_root(None, cx));
+        self.search.update(cx, |s, cx| s.set_root(None, cx));
+        self.sync_ide_folders(cx);
+    }
+
     fn toggle_pin(&mut self, cx: &mut Context<Self>) {
         self.context.pinned = !self.context.pinned;
         if !self.context.pinned {
@@ -1230,9 +1247,15 @@ impl Workspace {
 
     fn close_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.history_open {
+            self.close_history_window(cx);
+            self.focus_active_terminal(&FocusActiveTerminal, window, cx);
+        }
+    }
+
+    fn close_history_window(&mut self, cx: &mut Context<Self>) {
+        if self.history_open {
             self.history_open = false;
             self.git.update(cx, |g, cx| g.set_expanded(false, cx));
-            self.focus_active_terminal(&FocusActiveTerminal, window, cx);
             cx.notify();
         }
     }
@@ -1437,6 +1460,10 @@ impl Workspace {
                 }
             }
             PanelEvent::OpenFile { path, line, preview } => {
+                // From the history window: it closes so the file shows.
+                if !*preview {
+                    self.close_history_window(cx);
+                }
                 if let Some(i) = self.active {
                     self.open_file_in(i, path, *line, *preview, window, cx);
                 }
@@ -1445,6 +1472,7 @@ impl Workspace {
                 }
             }
             PanelEvent::RevealInExplorer(path) => {
+                self.close_history_window(cx);
                 self.sidebar_visible = true;
                 self.panel = Panel::Explorer;
                 self.explorer.update(cx, |e, cx| e.reveal(path.clone(), cx));
@@ -1712,6 +1740,7 @@ impl Workspace {
                         cx.notify();
                     })),
             )
+            .focus_trap("sidebar-trap", &self.sidebar_focus)
     }
 
     fn render_grid(&mut self, cx: &mut Context<Self>) -> AnyElement {

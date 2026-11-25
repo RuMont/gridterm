@@ -93,13 +93,16 @@ pub fn empty_state(message: impl Into<SharedString>) -> Div {
     div()
         .flex()
         .flex_1()
+        .min_w_0()
         .items_center()
         .justify_center()
         .p_4()
         .text_xs()
         .text_center()
         .text_color(rgb(theme::overlay0()))
-        .child(message.into())
+        // A flex item does not shrink below its text unless allowed to: the
+        // message wraps to the panel's width instead of running past it.
+        .child(div().min_w_0().max_w_full().child(message.into()))
 }
 
 /// Renders `text` with the characters at `indices` (char positions) highlighted.
