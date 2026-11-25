@@ -1404,6 +1404,51 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok(format!("offset {after_open:?} → {after_scroll:?}"))
     });
 
+    case!(r, "CC1", "Con un programa que solo recibe clics (como Claude Code), arrastrar selecciona texto", {
+        r.key("cmd-1");
+        // Written to the shell directly: typing needs a painted window.
+        let shell = |r: &mut Runner<'_>, cmd: &'static str| r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)));
+        shell(r, "clear; printf 'SELECT_ME here\\n\\033[?1000h\\033[?1006h'; cat > /dev/null\r");
+        r.sleep(500).await;
+        let from = r.find_in_terminal(0, "SELECT_ME").ok_or("text not on screen")?;
+        let to = r.find_in_terminal(0, "here").ok_or("text not on screen")?;
+        let none = Modifiers::default();
+        r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: from, modifiers: none, click_count: 1, first_mouse: false }));
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: to, pressed_button: Some(MouseButton::Left), modifiers: none }));
+        r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: to, modifiers: none, click_count: 1 }));
+        r.sleep(300).await;
+        let sel = r.read(|ws, cx| ws.terminals[0].read(cx).selection_text());
+        let screen = r.term_text(0);
+        shell(r, "\x03");
+        r.sleep(200).await;
+        shell(r, "printf '\\033[?1000l\\033[?1006l'; clear\r");
+        r.sleep(300).await;
+        ensure!(sel.as_deref().is_some_and(|s| s.contains("ECT_ME")), "selection {sel:?}");
+        // The program still got the click (the tty echoes the SGR report).
+        ensure!(screen.contains("[<0;"), "no mouse report reached the program:\n{screen}");
+        Ok(format!("seleccionado {sel:?}; el programa recibió el clic"))
+    });
+
+    case!(r, "CC2", "⌘V con solo una imagen en el portapapeles reenvía ctrl+V al programa (Claude Code pega la imagen)", {
+        r.key("cmd-1");
+        r.run("clear; stty raw -echo; head -c 1 | od -An -tx1; stty sane");
+        r.sleep(500).await;
+        // 1×1 transparent PNG.
+        const PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63,
+            0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
+            0x82,
+        ];
+        r.app(|_, cx| cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, PNG.to_vec()))));
+        r.key("cmd-v");
+        let got = r.wait_until(3000, |ws, cx| ws.terminals[0].read(cx).visible_text().lines().any(|l| l.trim() == "16")).await;
+        let screen = r.term_text(0);
+        r.run("clear");
+        got.ok_or_else(|| format!("the program did not get ^V (0x16):\n{screen}"))?;
+        Ok("el programa recibió 0x16".into())
+    });
+
     // ---------------------------------------------------------------- git --
     r.key("cmd-1");
     r.with(|ws, w, cx| ws.show_panel(Panel::Git, w, cx));
@@ -3003,9 +3048,16 @@ impl Runner<'_> {
             w.on_next_frame(move |_, _| a.set(Some(Instant::now())));
             w.refresh();
         });
+        // macOS stops drawing a window that is fully covered: give up after
+        // a while so the case fails instead of hanging the whole run.
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some(t) = at.get() {
                 return t;
+            }
+            if Instant::now() > deadline {
+                eprintln!("  (no frame in 5 s: is the window covered or minimised?)");
+                return Instant::now();
             }
             self.sleep(2).await;
         }

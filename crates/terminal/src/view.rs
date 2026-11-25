@@ -628,10 +628,26 @@ impl TerminalView {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+        let item = cx.read_from_clipboard();
+        if let Some(text) = item.as_ref().and_then(|i| i.text()) {
             self.term.lock().scroll_display(Scroll::Bottom);
             self.paste_text(&text);
+            return;
         }
+        // Only an image (e.g. a screenshot): programs like Claude Code read it
+        // from the clipboard on ctrl+V, which ⌘V forwards. Not to a shell,
+        // where ^V would quote the next key.
+        let image = item.is_some_and(|i| i.entries().iter().any(|e| matches!(e, ClipboardEntry::Image(_))));
+        if image && !self.shell_in_foreground() {
+            self.note_input();
+            self.write(vec![0x16]);
+        }
+    }
+
+    /// Whether the shell itself (no program) runs in the foreground.
+    fn shell_in_foreground(&self) -> bool {
+        let name = self.pty.as_ref().and_then(|p| p.foreground_name());
+        name.is_none_or(|n| keys::is_shell(&n))
     }
 
     fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
@@ -656,6 +672,13 @@ impl TerminalView {
         let side = if x % m.cell_width > m.cell_width / 2.0 { Side::Right } else { Side::Left };
         let offset = self.term.lock().grid().display_offset() as i32;
         Some((GridPoint::new(Line(row as i32 - offset), Column(col)), side))
+    }
+
+    /// The program asked for drag or motion reports (`?1002h`/`?1003h`).
+    /// Programs that only take clicks (`?1000h`, e.g. Claude Code) never see
+    /// a drag, so a drag there selects text locally.
+    fn reports_drags(&self) -> bool {
+        self.term.lock().mode().intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
     }
 
     fn mouse_mode(&self, shift: bool) -> bool {
@@ -772,7 +795,11 @@ impl TerminalView {
         }
         if self.mouse_mode(event.modifiers.shift) {
             self.send_mouse_report(0, true, event.position, event.modifiers);
-            return;
+            if self.reports_drags() {
+                return;
+            }
+            // Click-only reporting: the program got the click; a drag (or a
+            // double/triple click) still selects, as in a plain shell.
         }
         let Some((point, side)) = self.grid_point(event.position) else { return };
         let ty = match event.click_count {
@@ -803,9 +830,15 @@ impl TerminalView {
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.selecting {
             self.selecting = false;
-            let mut term = self.term.lock();
-            if term.selection.as_ref().is_some_and(|s| s.is_empty()) {
-                term.selection = None;
+            {
+                let mut term = self.term.lock();
+                if term.selection.as_ref().is_some_and(|s| s.is_empty()) {
+                    term.selection = None;
+                }
+            }
+            // The program that got the press also gets its release.
+            if self.mouse_mode(event.modifiers.shift) {
+                self.send_mouse_report(0, false, event.position, event.modifiers);
             }
             cx.notify();
         } else if self.mouse_mode(event.modifiers.shift) {

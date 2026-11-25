@@ -39,7 +39,8 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | Arrastrar un separador del grid (doble clic: igualar) | Cambiar el tamaño de celdas y filas |
 | ⌘ + clic sobre una URL o ruta | Abrir la URL; un archivo (`ruta:línea`) se abre como pestaña de esa terminal en esa línea; una carpeta se muestra en el Explorer (también enlaces OSC 8 y URL partidas en varias filas) |
 | Esc (en el sidebar) | Volver a la terminal activa |
-| ⌘C / ⌘V / ⌘K | Copiar selección / pegar / limpiar (en una terminal) |
+| ⌘C / ⌘V / ⌘K | Copiar selección / pegar / limpiar (en una terminal). Con solo una imagen en el portapapeles, ⌘V envía ctrl+V al programa en primer plano (así Claude Code pega la imagen); en la shell no hace nada |
+| Arrastrar, doble o triple clic | Seleccionar texto, también dentro de programas que solo reciben clics (Claude Code). En los que siguen el arrastre (vim con `mouse=a`, tmux), con ⇧ |
 | ⇧PgUp / ⇧PgDn, ⌘Home / ⌘End | Scroll del historial |
 
 En la paleta de File Search: ↩ (o doble clic) abre el archivo como pestaña de la celda activa, ⇧↩ inserta la ruta en la terminal activa, ⌥↩ hace `cd` a su carpeta, ⌘↩ la muestra en el Explorer, ⌘⇧C copia la ruta y Esc (o un clic fuera) cierra la paleta.

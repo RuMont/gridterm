@@ -130,6 +130,14 @@ pub fn is_text_input(k: &KeyInput, option_as_meta: bool) -> bool {
 }
 
 /// Wraps pasted text for the PTY, honouring bracketed paste mode.
+/// Whether process name `name` is an interactive shell (login shells show
+/// as `-zsh`).
+pub fn is_shell(name: &str) -> bool {
+    let name = name.trim_start_matches('-');
+    let name = name.rsplit('/').next().unwrap_or(name);
+    matches!(name, "zsh" | "bash" | "fish" | "sh" | "dash" | "ksh" | "tcsh" | "csh" | "nu" | "elvish" | "pwsh" | "xonsh")
+}
+
 pub fn paste_bytes(text: &str, mode: TermMode) -> Vec<u8> {
     if mode.contains(TermMode::BRACKETED_PASTE) {
         let clean = text.replace('\x1b', "");
@@ -149,6 +157,12 @@ mod tests {
 
     fn esc(k: KeyInput) -> Option<Vec<u8>> {
         to_esc(&k, TermMode::empty(), true)
+    }
+
+    #[test]
+    fn shells_are_recognised() {
+        assert!(is_shell("zsh") && is_shell("-zsh") && is_shell("/bin/bash"));
+        assert!(!is_shell("claude") && !is_shell("node") && !is_shell("vim"));
     }
 
     #[test]
