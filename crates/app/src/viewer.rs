@@ -117,9 +117,23 @@ fn memchr_nth_newline(bytes: &[u8], n: usize) -> Option<usize> {
 /// against its syntaxes), or the file name for extension-less files such as
 /// `Makefile` or `Dockerfile`.
 pub fn language_for(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some(ext) => ext.to_lowercase(),
-        None => path.file_name().and_then(|n| n.to_str()).unwrap_or("text").to_string(),
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("text");
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_lowercase);
+    // Extensions the bundled syntaxes do not list, mapped to one they do.
+    let alias = match (name, ext.as_deref()) {
+        ("Cargo.lock" | "uv.lock" | "poetry.lock", _) => Some("toml"),
+        (".editorconfig", _) => Some("ini"),
+        (_, Some("mjs" | "cjs")) => Some("js"),
+        // The TSX grammar knows JSX tags; the JavaScript one does not.
+        (_, Some("jsx")) => Some("tsx"),
+        (_, Some("jsonc" | "json5")) => Some("json"),
+        (_, Some("mdx")) => Some("md"),
+        _ => None,
+    };
+    match (alias, ext) {
+        (Some(alias), _) => alias.to_string(),
+        (None, Some(ext)) => ext,
+        (None, None) => name.to_string(),
     }
 }
 

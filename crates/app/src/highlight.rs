@@ -253,4 +253,17 @@ mod tests {
         assert!(got.iter().any(|(n, t)| *n == "keyword" && *t == "fn"), "{got:?}");
         assert!(parse("no-such-language", code).is_empty());
     }
+
+    #[test]
+    fn module_and_variant_extensions_are_highlighted() {
+        use std::path::Path;
+        let lang = |p: &str| crate::viewer::language_for(Path::new(p));
+        for file in ["a.mjs", "b.cjs", "c.jsx", "d.jsonc", "e.json5", "f.mdx", "Cargo.lock", ".editorconfig", "g.MJS"] {
+            assert!(super::find_syntax(&lang(file)).is_some(), "{file} → {}", lang(file));
+        }
+        let js = "export const x = \"s\"; // c\n";
+        let got: Vec<&str> = parse(&lang("m.mjs"), js).into_iter().map(|(_, n)| n).collect();
+        assert!(got.contains(&"string") && got.contains(&"comment"), "{got:?}");
+    }
 }
+
