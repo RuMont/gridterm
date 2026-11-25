@@ -1458,6 +1458,15 @@ impl Workspace {
                 self.open_history(window, cx);
                 return;
             }
+            PanelEvent::RepoChanged => {
+                for cell in self.cells.clone() {
+                    let viewers: Vec<_> = cell.read(cx).tabs().iter().map(|t| t.viewer.clone()).collect();
+                    for v in viewers {
+                        v.update(cx, |v, cx| v.refresh_git_marks(cx));
+                    }
+                }
+                return;
+            }
             PanelEvent::ConfigChanged(config) => {
                 self.apply_config(config.clone(), window, cx);
                 return;

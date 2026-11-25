@@ -20,6 +20,9 @@ pub enum PanelEvent {
     Notify { message: String, error: bool },
     /// Show the git history in the floating window.
     OpenHistory,
+    /// The repository's status changed (commit, stage, checkout…): open
+    /// files refresh their change marks.
+    RepoChanged,
     ConfigChanged(config::Config),
 }
 

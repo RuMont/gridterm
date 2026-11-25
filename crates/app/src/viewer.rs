@@ -12,7 +12,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 use fs_tools::watch::FileWatcher;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::input::{DefinitionProvider, Editor, EditorState, Position, Rope, RopeExt as _};
+use git_client::{GitRepo, LineChange, LineChangeKind};
+use gpui_kit::component::input::{
+    DefinitionProvider, Editor, EditorState, GutterDecoration, GutterDecorationCollection, OverviewRulerDecoration,
+    OverviewRulerDecorationCollection, OverviewRulerLane, Position, Rope, RopeExt as _,
+};
 use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -199,6 +203,12 @@ pub struct FileViewer {
     /// Time from load start to the text being set in the editor.
     pub(crate) last_load: Option<Duration>,
     load_task: Option<Task<()>>,
+    /// Lines changed against HEAD (marks next to the line numbers and on
+    /// the scrollbar), and the editor collections that show them; `None`
+    /// outside a repository.
+    pub(crate) line_changes: Vec<LineChange>,
+    git_marks: Option<(GutterDecorationCollection, OverviewRulerDecorationCollection)>,
+    marks_task: Option<Task<()>>,
     /// Selection and cursor last reported (byte range, cursor).
     last_selection: (std::ops::Range<usize>, usize),
     _watcher: Option<FileWatcher>,
@@ -277,6 +287,9 @@ impl FileViewer {
             loads: 0,
             last_load: None,
             load_task: None,
+            line_changes: Vec::new(),
+            git_marks: None,
+            marks_task: None,
             last_selection: (0..0, 0),
             _watcher: watcher,
             _watch_task: Some(watch_task),
@@ -489,6 +502,72 @@ impl FileViewer {
         self.last_load = Some(started.elapsed());
         if self.state == ViewerState::Text {
             self.apply_goto(window, cx);
+            self.refresh_git_marks(cx);
+        }
+        cx.notify();
+    }
+
+    /// Re-reads which lines changed against HEAD (off the UI thread) and
+    /// marks them: green added, blue modified, red where lines were removed.
+    pub fn refresh_git_marks(&mut self, cx: &mut Context<Self>) {
+        if self.state != ViewerState::Text {
+            return;
+        }
+        let path = self.path.clone();
+        let work = cx.background_spawn(async move {
+            let root = crate::workspace::find_repo_root(path.parent()?)?;
+            GitRepo::open(&root).ok()?.line_changes(&path).ok()
+        });
+        self.marks_task = Some(cx.spawn(async move |this, cx| {
+            let changes = work.await;
+            let _ = this.update(cx, |v, cx| v.show_git_marks(changes, cx));
+        }));
+    }
+
+    fn show_git_marks(&mut self, changes: Option<Vec<LineChange>>, cx: &mut Context<Self>) {
+        // Outside a repository: no strip at all.
+        let Some(changes) = changes else {
+            self.git_marks = None;
+            self.line_changes.clear();
+            return;
+        };
+        let (gutter, ruler): (Vec<_>, Vec<_>) = {
+            let text = self.editor.read(cx).text();
+            let lines = text.lines_len();
+            // Start of 0-based line `row`; the end of the text past the last.
+            let start = |row: usize| if row < lines { text.line_start_offset(row) } else { text.len() };
+            changes
+                .iter()
+                .filter(|c| (c.start as usize) <= lines + 1)
+                .map(|c| {
+                    let first = (c.start as usize).saturating_sub(1);
+                    let (range, color) = match c.kind {
+                        LineChangeKind::Deleted => (start(first)..start(first), theme::red()),
+                        LineChangeKind::Added => (start(first)..start(first + c.count as usize), theme::green()),
+                        LineChangeKind::Modified => (start(first)..start(first + c.count as usize), theme::accent()),
+                    };
+                    let color: Hsla = rgb(color).into();
+                    (
+                        GutterDecoration::new(range.clone()).with_color(color),
+                        OverviewRulerDecoration::new(range).with_lane(OverviewRulerLane::Left).with_color(color),
+                    )
+                })
+                .unzip()
+        };
+        self.line_changes = changes;
+        match &self.git_marks {
+            Some((g, r)) => {
+                g.set(gutter, cx);
+                r.set(ruler, cx);
+            }
+            None => {
+                // The strip stays (empty) while the file is in a repository,
+                // so the text does not shift when the first change appears.
+                let marks = self.editor.update(cx, |e, cx| {
+                    (e.create_gutter_decorations_collection(gutter, cx), e.create_overview_ruler_decorations_collection(ruler, cx))
+                });
+                self.git_marks = Some(marks);
+            }
         }
         cx.notify();
     }

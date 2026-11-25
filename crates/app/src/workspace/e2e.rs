@@ -1822,6 +1822,52 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         result
     });
 
+    case!(r, "GG1", "Marcas de git junto a los números de línea: añadidas, modificadas y borradas; desaparecen al hacer commit", {
+        use git_client::{LineChange, LineChangeKind::*};
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().map(|o| o.status.success()).unwrap_or(false);
+        let file = repo.join("marks.txt");
+        write(&file, "1\n2\n3\n4\n5\n6\n");
+        ensure!(git(&["add", "marks.txt"]) && git(&["commit", "-q", "-m", "marks base"]), "cannot commit");
+        r.key("cmd-1");
+        r.open_in(0, &file, None, false);
+        let f = file.clone();
+        r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 0, &f)).await.ok_or("file not opened")?;
+        let marks = |ws: &Workspace, cx: &App| visible_viewer(ws, cx, 0).map(|v| v.read(cx).line_changes.clone()).unwrap_or_default();
+        let result: Result<String, String> = async {
+            // Edited on disk: the viewer reloads and marks the lines.
+            write(&file, "1\nTWO\n3\nnew\n4\n6\n");
+            let change = |kind, start, count| LineChange { kind, start, count };
+            let want = vec![change(Modified, 2, 1), change(Added, 4, 1), change(Deleted, 6, 0)];
+            let w = want.clone();
+            let shown = r.wait_until(4000, move |ws, cx| marks(ws, cx) == w).await;
+            r.next_frame().await;
+            r.next_frame().await;
+            r.shot("GG1-marks");
+            let got = r.read(marks);
+            shown.ok_or_else(|| format!("marks {got:?}, expected {want:?}"))?;
+            // Committed: the marks go, without the file changing.
+            ensure!(git(&["add", "marks.txt"]) && git(&["commit", "-q", "-m", "marks edit"]), "cannot commit the edit");
+            r.wait_until(5000, |ws, cx| marks(ws, cx).is_empty()).await.ok_or("marks still shown after the commit")?;
+            // An untracked file is all added.
+            let untracked = repo.join("fresh.txt");
+            write(&untracked, "a\nb\nc\n");
+            r.open_in(0, &untracked, None, false);
+            let u = untracked.clone();
+            r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 0, &u)).await.ok_or("untracked file not opened")?;
+            let fresh = r.wait_until(3000, |ws, cx| marks(ws, cx) == vec![LineChange { kind: Added, start: 1, count: 3 }]).await;
+            let got = r.read(marks);
+            fresh.ok_or_else(|| format!("untracked file marks {got:?}"))?;
+            Ok("M2 A4 D6; nada tras el commit; sin seguimiento: todo añadido".into())
+        }
+        .await;
+        r.close_all_tabs();
+        r.key("cmd-1");
+        std::fs::remove_file(repo.join("fresh.txt")).ok();
+        git(&["reset", "-q", "--hard", "HEAD~2"]);
+        r.wait_until(5000, |ws, cx| ws.git.read(cx).log.first().is_some_and(|c| !c.summary.starts_with("marks"))).await;
+        result
+    });
+
     case!(r, "Gi5", "Revertir un commit pusheado (confirmación + push)", {
         let target = r.read(|ws, cx| ws.git.read(cx).log.iter().find(|c| c.on_head).cloned()).ok_or("empty log")?;
         r.with({

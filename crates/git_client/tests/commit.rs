@@ -94,3 +94,37 @@ fn commit_details_diff_against_first_parent() {
     assert!(capped.truncated);
     assert!(capped.files.iter().map(|f| f.diff.hunks.iter().map(|h| h.lines.len()).sum::<usize>()).sum::<usize>() <= 2);
 }
+
+#[test]
+fn line_changes_against_head() {
+    use git_client::{LineChange, LineChangeKind::*};
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    git(d, &["init", "-q", "-b", "main"]);
+    for (k, v) in [("user.name", "T"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
+        git(d, &["config", k, v]);
+    }
+    fs::write(d.join("f.txt"), "1\n2\n3\n4\n5\n6\n").unwrap();
+    git(d, &["add", "."]);
+    git(d, &["commit", "-q", "-m", "base"]);
+    let repo = GitRepo::open(d).unwrap();
+    assert_eq!(repo.line_changes(Path::new("f.txt")).unwrap(), vec![]);
+
+    // 2 modified, a line added after 3, 5 removed.
+    fs::write(d.join("f.txt"), "1\nTWO\n3\nnew\n4\n6\n").unwrap();
+    let change = |kind, start, count| LineChange { kind, start, count };
+    assert_eq!(
+        repo.line_changes(Path::new("f.txt")).unwrap(),
+        vec![change(Modified, 2, 1), change(Added, 4, 1), change(Deleted, 6, 0)]
+    );
+    // Staged or not, it is the same against HEAD; committed, nothing.
+    git(d, &["add", "f.txt"]);
+    assert_eq!(repo.line_changes(&d.join("f.txt")).unwrap().len(), 3, "absolute path, staged");
+    git(d, &["commit", "-q", "-m", "more"]);
+    assert_eq!(repo.line_changes(Path::new("f.txt")).unwrap(), vec![]);
+    // Removed at the top, and an untracked file is all added.
+    fs::write(d.join("f.txt"), "TWO\n3\nnew\n4\n6\n").unwrap();
+    assert_eq!(repo.line_changes(Path::new("f.txt")).unwrap(), vec![change(Deleted, 1, 0)]);
+    fs::write(d.join("u.txt"), "a\nb\n").unwrap();
+    assert_eq!(repo.line_changes(Path::new("u.txt")).unwrap(), vec![change(Added, 1, 2)]);
+}

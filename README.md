@@ -29,6 +29,7 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | (indicador) | Una celda con un comando en marcha (`npm run start`, tests, `sleep`, un agente abierto) se enmarca en naranja y su pestaña lleva un punto naranja; el punto pulsa mientras el comando imprime (compila, ejecuta tests, el agente trabaja). Se apaga al volver al prompt |
 | Clic derecho en las pestañas de una celda | Menú: «Nueva terminal en celda» abre una terminal hija en la carpeta de la que se ve. Comparte la celda: sus archivos y lo que ve un agente que corra en ella. ⌘W o su ✕ la cierran; el ✕ de la derecha sigue cerrando la celda entera |
 | Rueda, ⇧ + rueda o trackpad sobre las pestañas | Desplazarlas en horizontal cuando no caben (la pestaña que se abre se hace visible sola) |
+| (marcas de git en un archivo) | Junto a los números de línea y en la barra de scroll: verde las líneas añadidas, azul las modificadas y una marca roja donde se borraron, respecto al último commit (con o sin stage). Se actualizan al guardar el archivo y al hacer commit o stage |
 | ⌘ + clic o F12 sobre un símbolo (en un archivo) | Ir a su declaración: sigue el `import`/`use` hasta el archivo (TS/JS y Rust, con alias de `tsconfig`, `node_modules` y re-exportaciones); si no, la busca en el mismo archivo y luego en el proyecto. Con ⌘ pulsado el símbolo se subraya |
 | ⌘1…⌘9 | Enfocar la terminal N |
 | ⌘⌥←↑→↓ | Mover el foco por el grid |

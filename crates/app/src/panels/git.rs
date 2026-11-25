@@ -548,6 +548,7 @@ impl GitPanel {
                         if p.status.as_ref() != Some(&s) {
                             p.status = Some(s);
                             changed = true;
+                            cx.emit(PanelEvent::RepoChanged);
                         }
                         changed |= p.error.take().is_some();
                     }
