@@ -46,6 +46,30 @@ pub fn process_name(pid: i32) -> Option<String> {
     std::str::from_utf8(&buf[..n as usize]).ok().map(str::to_owned)
 }
 
+/// Parent of `pid` (None for unknown processes and for launchd).
+pub fn parent_pid(pid: i32) -> Option<i32> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is a properly sized, zeroed proc_bsdinfo.
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+    (n == size && info.pbi_ppid > 0).then_some(info.pbi_ppid as i32)
+}
+
+/// Whether `ancestor` is `pid` itself or one of its ancestors.
+pub fn is_descendant(pid: i32, ancestor: i32) -> bool {
+    let mut p = pid;
+    for _ in 0..64 {
+        if p == ancestor {
+            return true;
+        }
+        match parent_pid(p) {
+            Some(parent) if parent != p => p = parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Direct children of `pid`.
 pub fn child_pids(pid: i32) -> Vec<i32> {
     let mut buf = vec![0 as libc::pid_t; 256];
@@ -64,6 +88,18 @@ pub fn child_pids(pid: i32) -> Vec<i32> {
         }
         buf.resize(buf.len() * 2, 0);
     }
+}
+
+/// `pid` and every process below it (children, grandchildren…).
+pub fn descendants(pid: i32) -> Vec<i32> {
+    let mut out = vec![pid];
+    let mut i = 0;
+    while i < out.len() && out.len() < 4096 {
+        let p = out[i];
+        out.extend(child_pids(p));
+        i += 1;
+    }
+    out
 }
 
 /// Process group of `pid`.
@@ -98,5 +134,33 @@ mod tests {
         assert!(found, "sleep {pid} not among children of {me}");
         assert_eq!(group, pgid(me), "child inherits our process group");
         assert_eq!(name.as_deref(), Some("sleep"));
+    }
+
+    #[test]
+    fn parent_and_ancestry() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let me = std::process::id() as i32;
+        let pid = child.id() as i32;
+        let parent = parent_pid(pid);
+        let desc = is_descendant(pid, me);
+        let not_desc = is_descendant(me, pid);
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(parent, Some(me));
+        assert!(desc && !not_desc);
+        assert!(is_descendant(me, 1), "every process descends from launchd");
+        assert_eq!(parent_pid(-5), None);
+    }
+
+    #[test]
+    fn descendants_include_children() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let me = std::process::id() as i32;
+        let all = descendants(me);
+        let pid = child.id() as i32;
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(all[0], me);
+        assert!(all.contains(&pid), "{all:?}");
     }
 }

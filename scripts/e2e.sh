@@ -20,6 +20,12 @@ echo "== build (release, e2e)"
 cargo build --release -p gridterm --features e2e 2>&1 | tail -1
 cp target/release/gridterm "$OUT/gridterm-e2e"
 BIN="$OUT/gridterm-e2e"
+cargo build --release -p agents --bin ide-probe 2>&1 | tail -1
+export GRIDTERM_E2E_IDE_PROBE="$PWD/target/release/ide-probe"
+# Claude Code /ide lock files of the test runs stay out of ~/.claude/ide.
+export GRIDTERM_IDE_LOCK_DIR="$OUT/ide-locks"
+# The agent MCP socket of the test runs stays out of $TMPDIR.
+export GRIDTERM_SOCKET_DIR="$OUT/sockets"
 
 run_app() { # phase timeout
   # Launched like a GUI app: no LANG/LC_* (gridterm must set a UTF-8 locale).
@@ -46,6 +52,17 @@ sys.exit(0 if all(c in s for c in exp) else 1)
 PY
 then record F1a "Al salir se guarda la sesión (fichero)" PASS "$CFG/session.toml"
 else record F1a "Al salir se guarda la sesión (fichero)" FAIL "no session file with cwds ($CFG/session.toml)"; fi
+
+# I9b: the IDE lock file is removed when the app quits.
+LOCK="$(cat "$OUT/ide_lock_path" 2>/dev/null)"
+if [[ -n "$LOCK" && ! -e "$LOCK" ]] && [[ -z "$(ls -A "$GRIDTERM_IDE_LOCK_DIR" 2>/dev/null)" ]]; then
+  record IDE9b "Al salir de la app se borra el .lock de /ide" PASS "$GRIDTERM_IDE_LOCK_DIR vacío"
+else record IDE9b "Al salir de la app se borra el .lock de /ide" FAIL "left: $(ls -A "$GRIDTERM_IDE_LOCK_DIR" 2>/dev/null)"; fi
+
+# M8: the agent socket is removed when the app quits.
+SOCK="$(cat "$OUT/agent_socket_path" 2>/dev/null)"
+if [[ -n "$SOCK" && ! -e "$SOCK" ]]; then record M8 "Al salir de la app se borra el socket de agentes" PASS "$SOCK no existe"
+else record M8 "Al salir de la app se borra el socket de agentes" FAIL "left: ${SOCK:-no path recorded}"; fi
 
 echo "== e2e phase 2 (restore)"
 GRIDTERM_E2E_EXPECT_CWDS="$EXP" run_app restore 60 || echo "phase 2 timed out"
@@ -143,6 +160,9 @@ def by_binary(cid, name, binaries, name_filter=None):
 by_binary("G1", "compute_layout: horizontal→vertical, última fila estirada", ["layout"])
 by_binary("T4", "Teclas → secuencias xterm", ["terminal"], r"keys::")
 by_binary("Y-lib", "Git graph: carriles, merges, octopus, límite, reutilización; log con todas las ramas y refs", ["git_client"], r"graph::|log_includes_all_branches")
+by_binary("IDE-lib", "Claude Code /ide: lock 0600, token, subprotocolo mcp, MCP, notificaciones, varias conexiones", ["agents", "ide"])
+by_binary("M-lib", "MCP de agentes: socket (pid del kernel, 0600), gridterm mcp, ficheros generados, integración de zsh real", ["mcp"])
+by_binary("IDE-pid", "Procesos: padre y ascendencia (asignar la conexión a su celda)", ["terminal"], r"parent_and_ancestry")
 by_binary("K-lib", "Procesos: hijos y grupo de proceso (detección de procesos activos)", ["terminal"], r"cwd::")
 by_binary("T5", "Option como Meta configurable", ["terminal"], r"t5_option")
 by_binary("T6-lib", "Copiar = texto de la selección", ["plan"], r"t6_")

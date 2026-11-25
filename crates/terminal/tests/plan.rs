@@ -18,7 +18,7 @@ fn t3_first_output_under_50ms() {
     let mut samples = Vec::new();
     for _ in 0..5 {
         let (term, listener, mut events) = new_term(SIZE, 1000);
-        let opts = SpawnOptions { shell: Some("/bin/sh".into()), cwd: None, scrollback: 1000 };
+        let opts = SpawnOptions { shell: Some("/bin/sh".into()), cwd: None, scrollback: 1000, extra_env: Vec::new() };
         let start = Instant::now();
         let _pty = Pty::spawn(term, listener, &opts, SIZE, 1).expect("spawn");
         let spawn = start.elapsed();

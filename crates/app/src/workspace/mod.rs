@@ -153,6 +153,22 @@ pub struct Workspace {
     shrink_focus: FocusHandle,
     /// Painted bounds of the dialog's Cancel and Close buttons (e2e).
     pub(crate) shrink_buttons: std::rc::Rc<std::cell::Cell<(Bounds<Pixels>, Bounds<Pixels>)>>,
+    /// Claude Code IDE integration (`/ide`), when enabled.
+    pub(crate) ide: Option<agents::ide::IdeServer>,
+    /// Identified agent connections → id of the terminal (cell) they run in.
+    pub(crate) ide_conns: std::collections::HashMap<agents::ide::ConnId, u64>,
+    /// Last view sent to each connection (sends only changes).
+    ide_sent: std::collections::HashMap<agents::ide::ConnId, agents::ide::Selection>,
+    /// `at_mentioned` notifications sent (diagnostics/e2e).
+    pub(crate) at_mentions_sent: u32,
+    _ide_task: Option<Task<()>>,
+    /// Socket `gridterm mcp` asks through, when agent MCP is enabled.
+    pub(crate) agent_socket: Option<agents::socket::AgentSocket>,
+    /// Plugin, agent configs and zsh integration that load the MCP server.
+    pub(crate) agent_files: Option<agents::integration::AgentFiles>,
+    /// Socket requests answered (diagnostics/e2e).
+    pub(crate) agent_requests: u32,
+    _agent_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
     _poll: Task<()>,
 }
@@ -239,9 +255,21 @@ impl Workspace {
             pending_shrink: None,
             shrink_focus: cx.focus_handle(),
             shrink_buttons: Default::default(),
+            ide: None,
+            ide_conns: Default::default(),
+            ide_sent: Default::default(),
+            at_mentions_sent: 0,
+            _ide_task: None,
+            agent_socket: None,
+            agent_files: None,
+            agent_requests: 0,
+            _agent_task: None,
             _subscriptions: subscriptions,
             _poll: poll,
         };
+        // Before any shell starts: shells get the integration's port.
+        ws.set_ide_enabled(ws.config.agents.claude_ide, cx);
+        ws.set_agent_mcp_enabled(ws.config.agents.mcp, cx);
         match crate::session::Session::load() {
             Some(session) => ws.restore(session, window, cx),
             // First launch: ask where to open the first terminal.
@@ -249,6 +277,10 @@ impl Workspace {
         }
         // Save the session when the app quits.
         ws._subscriptions.push(cx.on_app_quit(|ws, cx| {
+            // Removes the IDE lock file and the agent socket (process exit
+            // skips destructors).
+            ws.ide = None;
+            ws.agent_socket = None;
             let session = ws.session(cx);
             // Process exit skips destructors: end every shell explicitly so
             // none outlives the app.
@@ -359,6 +391,245 @@ impl Workspace {
             scrollback: t.scrollback_lines,
             shell: t.shell.clone(),
             cursor_blink: t.cursor_blink,
+            extra_env: self.agent_env(),
+        }
+    }
+
+    /// Environment that connects agents started in a new shell to gridterm.
+    fn agent_env(&self) -> Vec<(String, String)> {
+        let mut env = Vec::new();
+        if let Some(ide) = &self.ide {
+            env.push((agents::ide::PORT_ENV.to_string(), ide.port().to_string()));
+        }
+        if let (Some(socket), Some(files)) = (&self.agent_socket, &self.agent_files) {
+            env.push((agents::socket::SOCKET_ENV.to_string(), socket.path().display().to_string()));
+            let shell = self.config.terminal.shell.clone().unwrap_or_else(terminal::backend::user_shell);
+            env.extend(agents::integration::shell_env(files, &shell, |k| std::env::var(k).ok()));
+        }
+        env
+    }
+
+    /// Starts or stops the agent socket and (re)writes the files that make
+    /// agents in a cell load `gridterm mcp`. New shells get (or no longer
+    /// get) the environment; running ones keep theirs.
+    pub(crate) fn set_agent_mcp_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if enabled == self.agent_socket.is_some() {
+            return;
+        }
+        self._agent_task = None;
+        self.agent_socket = None;
+        self.agent_files = None;
+        if !enabled {
+            return;
+        }
+        let Some(dir) = config::Config::dir().map(|d| d.join("agents")) else { return };
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => return log::warn!("agent MCP unavailable: no executable path: {e}"),
+        };
+        let files = match agents::integration::write_agent_files(&dir, &exe) {
+            Ok(files) => files,
+            Err(e) => return log::warn!("agent MCP unavailable: cannot write {}: {e:#}", dir.display()),
+        };
+        // GRIDTERM_SOCKET_DIR keeps tests apart from the user's instance.
+        let socket_dir = std::env::var_os("GRIDTERM_SOCKET_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let path = agents::socket::socket_path(&socket_dir, std::process::id());
+        agents::socket::remove_stale(&path);
+        match agents::socket::AgentSocket::start(&path) {
+            Ok(mut socket) => {
+                if let Some(mut requests) = socket.take_requests() {
+                    self._agent_task = Some(cx.spawn(async move |this, cx| {
+                        use futures::StreamExt as _;
+                        while let Some(request) = requests.next().await {
+                            if this.update(cx, |ws, cx| ws.answer_agent(request, cx)).is_err() {
+                                break;
+                            }
+                        }
+                    }));
+                }
+                self.agent_socket = Some(socket);
+                self.agent_files = Some(files);
+            }
+            Err(e) => log::warn!("agent MCP unavailable: cannot listen on {}: {e:#}", path.display()),
+        }
+    }
+
+    /// Answers `gridterm mcp`: only with the context of the cell whose shell
+    /// the asking process (known from the kernel) descends from.
+    fn answer_agent(&mut self, request: agents::socket::AgentRequest, cx: &mut Context<Self>) {
+        self.agent_requests += 1;
+        let index = request.peer_pid.and_then(|pid| {
+            self.terminals.iter().position(|t| t.read(cx).child_pid().is_some_and(|shell| terminal::cwd::is_descendant(pid, shell)))
+        });
+        let Some(i) = index else {
+            return request.respond(serde_json::json!({ "error": "not running inside a gridterm cell" }));
+        };
+        let cell = self.cells[i].read(cx);
+        let answer = match request.method.as_str() {
+            "selection" => selection_json(&cell.agent_view(cx)),
+            "cell" => cell.agent_context(cx),
+            other => serde_json::json!({ "error": format!("unknown request: {other}") }),
+        };
+        request.respond(answer);
+    }
+
+    // ---- agents: Claude Code IDE integration -------------------------------------
+
+    /// Starts or stops the `/ide` server. Shells started from now on get (or
+    /// no longer get) its port; running shells keep theirs.
+    pub(crate) fn set_ide_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if enabled == self.ide.is_some() {
+            return;
+        }
+        self.ide_conns.clear();
+        self.ide_sent.clear();
+        self._ide_task = None;
+        self.ide = None;
+        if !enabled {
+            return;
+        }
+        // GRIDTERM_IDE_LOCK_DIR keeps tests out of ~/.claude/ide.
+        let dir = std::env::var_os("GRIDTERM_IDE_LOCK_DIR").map(PathBuf::from).or_else(agents::ide::default_lock_dir);
+        let Some(dir) = dir else { return };
+        match agents::ide::IdeServer::start(&dir, self.ide_folders(cx)) {
+            Ok(mut server) => {
+                if let Some(mut events) = server.take_events() {
+                    self._ide_task = Some(cx.spawn(async move |this, cx| {
+                        use futures::StreamExt as _;
+                        while let Some(event) = events.next().await {
+                            if this.update(cx, |ws, cx| ws.on_ide_event(event, cx)).is_err() {
+                                break;
+                            }
+                        }
+                    }));
+                }
+                self.ide = Some(server);
+            }
+            Err(e) => log::warn!("Claude Code IDE integration unavailable: {e:#}"),
+        }
+    }
+
+    /// Roots of the open terminals (Claude Code also finds the IDE by
+    /// `workspaceFolders` containing its cwd, e.g. inside tmux).
+    fn ide_folders(&self, cx: &App) -> Vec<String> {
+        let mut folders: Vec<String> = Vec::new();
+        for t in &self.terminals {
+            if let Some(cwd) = t.read(cx).cwd() {
+                let root = find_repo_root(cwd).unwrap_or_else(|| cwd.clone()).display().to_string();
+                if !folders.contains(&root) {
+                    folders.push(root);
+                }
+            }
+        }
+        folders
+    }
+
+    fn sync_ide_folders(&self, cx: &App) {
+        if let Some(ide) = &self.ide {
+            if let Err(e) = ide.set_workspace_folders(self.ide_folders(cx)) {
+                log::warn!("could not update the IDE lock file: {e:#}");
+            }
+        }
+    }
+
+    fn on_ide_event(&mut self, event: agents::ide::IdeEvent, cx: &mut Context<Self>) {
+        match event {
+            agents::ide::IdeEvent::Connected { conn, pid } => {
+                // The agent's cell: the terminal whose shell it descends from.
+                let Some(pid) = pid else { return };
+                let terminal = self.terminals.iter().map(|t| t.read(cx)).find(|t| {
+                    t.child_pid().is_some_and(|shell| terminal::cwd::is_descendant(pid, shell))
+                });
+                if let Some(id) = terminal.map(|t| t.id()) {
+                    self.bind_ide_conn(conn, id, cx);
+                }
+            }
+            agents::ide::IdeEvent::Anonymous { conn, peer_port } => {
+                // No token, no self-identification (opencode): ask the system
+                // which process in a cell holds the connection.
+                let Some(server_port) = self.ide.as_ref().map(|i| i.port()) else { return };
+                let shells: Vec<(u64, i32)> =
+                    self.terminals.iter().filter_map(|t| t.read(cx).child_pid().map(|p| (t.read(cx).id(), p))).collect();
+                let lookup = cx.background_spawn(async move {
+                    let trees: Vec<(u64, Vec<i32>)> =
+                        shells.into_iter().map(|(id, shell)| (id, terminal::cwd::descendants(shell))).collect();
+                    let candidates: Vec<i32> = trees.iter().flat_map(|(_, t)| t.iter().copied()).collect();
+                    let pid = agents::ide::tcp_client_pid(&candidates, peer_port, server_port)?;
+                    trees.into_iter().find(|(_, tree)| tree.contains(&pid)).map(|(id, _)| id)
+                });
+                cx.spawn(async move |this, cx| {
+                    if let Some(id) = lookup.await {
+                        let _ = this.update(cx, |ws, cx| ws.bind_ide_conn(conn, id, cx));
+                    }
+                })
+                .detach();
+            }
+            agents::ide::IdeEvent::Disconnected(conn) => {
+                self.ide_conns.remove(&conn);
+                self.ide_sent.remove(&conn);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Connection `conn` belongs to terminal `id`'s cell: send it the view.
+    fn bind_ide_conn(&mut self, conn: agents::ide::ConnId, id: u64, cx: &mut Context<Self>) {
+        self.ide_conns.insert(conn, id);
+        self.push_agent_view(id, cx);
+        // Agents subscribe to `selection_changed` only once their UI is up, a
+        // moment after connecting: what is sent before is lost (seen with
+        // Claude Code). Send the current view again.
+        cx.spawn(async move |this, cx| {
+            for delay in [500u64, 2000] {
+                cx.background_executor().timer(Duration::from_millis(delay)).await;
+                let alive = this.update(cx, |ws, cx| {
+                    if ws.ide_conns.contains_key(&conn) {
+                        ws.ide_sent.remove(&conn);
+                        ws.push_agent_view(id, cx);
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Sends what terminal `id`'s cell shows to the agents running in it.
+    fn push_agent_view(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(ide) = &self.ide else { return };
+        let Some(i) = self.terminals.iter().position(|t| t.read(cx).id() == id) else { return };
+        let view = self.cells[i].read(cx).agent_view(cx);
+        for (conn, _) in self.ide_conns.iter().filter(|(_, t)| **t == id) {
+            if self.ide_sent.get(conn) != Some(&view) && ide.send(*conn, &agents::ide::Notification::SelectionChanged(view.clone())) {
+                self.ide_sent.insert(*conn, view.clone());
+            }
+        }
+    }
+
+    /// ⌥⌘K in a viewer: inserts `@file#Lx-y` into the prompt of the agents
+    /// running in that cell.
+    fn send_to_agent(&mut self, _: &SendToAgent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(i) = self.cells.iter().position(|c| c.read(cx).contains_focused(window, cx)) else { return };
+        let Some(viewer) = self.cells[i].read(cx).visible_viewer().cloned() else { return };
+        let id = self.terminals[i].read(cx).id();
+        let sel = viewer.read(cx).agent_selection(cx);
+        let Some(file_path) = sel.file_path.clone() else { return };
+        // A selection ending at the start of a line does not include it.
+        let lines = (!sel.text.is_empty()).then(|| {
+            let end = if sel.end.1 == 0 && sel.end.0 > sel.start.0 { sel.end.0 - 1 } else { sel.end.0 };
+            (sel.start.0, end)
+        });
+        let conns: Vec<_> = self.ide_conns.iter().filter(|(_, t)| **t == id).map(|(c, _)| *c).collect();
+        let Some(ide) = &self.ide else { return };
+        let mention = agents::ide::Notification::AtMentioned { file_path, lines };
+        let sent = conns.iter().filter(|c| ide.send(**c, &mention)).count();
+        if sent == 0 {
+            self.notify_user("No Claude Code session is connected in this cell (run `claude` in its terminal).", false, window, cx);
+        } else {
+            self.at_mentions_sent += sent as u32;
         }
     }
 
@@ -644,6 +915,10 @@ impl Workspace {
                     self.set_active(index, window, cx);
                 }
             }
+            CellEvent::ViewChanged => {
+                let id = self.terminals[index].read(cx).id();
+                self.push_agent_view(id, cx);
+            }
         }
     }
 
@@ -740,6 +1015,7 @@ impl Workspace {
         }
         let repo_root = cwd.as_deref().and_then(find_repo_root);
         let root = repo_root.clone().or_else(|| cwd.clone());
+        self.sync_ide_folders(cx);
         let root_changed = root != self.context.root;
         let repo_changed = repo_root != self.context.repo_root;
         self.context = ActiveContext { terminal_id: Some(id), cwd, repo_root: repo_root.clone(), root: root.clone(), pinned: false };
@@ -982,7 +1258,15 @@ impl Workspace {
         self.explorer.update(cx, |e, cx| e.set_max_results(max, cx));
         let max_files = config.search.max_indexed_files;
         self.search.update(cx, |s, _| s.set_max_files(max_files));
+        let ide_changed = config.agents.claude_ide != self.config.agents.claude_ide;
+        let mcp_changed = config.agents.mcp != self.config.agents.mcp;
         self.config = config;
+        if ide_changed {
+            self.set_ide_enabled(self.config.agents.claude_ide, cx);
+        }
+        if mcp_changed {
+            self.set_agent_mcp_enabled(self.config.agents.mcp, cx);
+        }
         if terminal_changed {
             let settings = self.terminal_settings();
             for t in &self.terminals {
@@ -1528,6 +1812,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::close_terminal))
             .on_action(cx.listener(Self::toggle_zoom))
             .on_action(cx.listener(Self::show_terminal_tab))
+            .on_action(cx.listener(Self::send_to_agent))
             .on_action(cx.listener(|this, _: &NextTab, w, cx| this.cycle_tab(true, w, cx)))
             .on_action(cx.listener(|this, _: &PrevTab, w, cx| this.cycle_tab(false, w, cx)))
             .on_action(cx.listener(|this, _: &crate::panels::git::ConfirmSetUpstream, w, cx| {
@@ -1642,6 +1927,17 @@ pub fn square_corners(cx: &mut App) {
     theme.radius_lg = px(0.);
     theme.window_radius = px(0.);
     theme.shadow = false;
+}
+
+/// `get_selection` result: 1-based, inclusive lines for the model.
+fn selection_json(sel: &agents::ide::Selection) -> serde_json::Value {
+    let Some(file) = &sel.file_path else { return serde_json::json!({ "file": null }) };
+    if sel.text.is_empty() {
+        return serde_json::json!({ "file": file, "cursor_line": sel.start.0 + 1 });
+    }
+    // A selection ending at the start of a line does not include that line.
+    let end = if sel.end.1 == 0 && sel.end.0 > sel.start.0 { sel.end.0 - 1 } else { sel.end.0 };
+    serde_json::json!({ "file": file, "start_line": sel.start.0 + 1, "end_line": end + 1, "text": sel.text })
 }
 
 /// Nearest ancestor of `dir` (inclusive) containing a `.git` entry (directory

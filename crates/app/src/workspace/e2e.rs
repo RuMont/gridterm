@@ -486,6 +486,22 @@ pub fn start(window: &mut Window, cx: &mut Context<Workspace>) {
             u6_heavy_search(&mut r, &base, &home).await;
         } else if phase == "restore" {
             restore_phase(&mut r).await;
+        } else if phase == "claude" {
+            let fixture = Fixture::create(out.join("fixture"));
+            claude_cases(&mut r, &fixture).await;
+        } else if phase == "agents" {
+            let fixture = Fixture::create(out.join("fixture"));
+            agents_cases(&mut r, &fixture).await;
+        } else if phase == "idemcp" {
+            let fixture = Fixture::create(out.join("fixture"));
+            ide_cases(&mut r, &fixture).await;
+            mcp_cases(&mut r, &fixture).await;
+        } else if phase == "mcp" {
+            let fixture = Fixture::create(out.join("fixture"));
+            mcp_cases(&mut r, &fixture).await;
+        } else if phase == "ide" {
+            let fixture = Fixture::create(out.join("fixture"));
+            ide_cases(&mut r, &fixture).await;
         } else if phase == "ranking" {
             let fixture = Fixture::create(out.join("fixture"));
             ranking_cases(&mut r, &fixture).await;
@@ -1549,6 +1565,8 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
     viewer_cases(r, fx).await;
     debounce_cases(r, fx).await;
     ranking_cases(r, fx).await;
+    ide_cases(r, fx).await;
+    mcp_cases(r, fx).await;
     grid_cases(r, fx).await;
     graph_cases(r, fx).await;
 
@@ -4160,4 +4178,796 @@ async fn ranking_cases(r: &mut Runner<'_>, fx: &Fixture) {
     });
     r.key("cmd-1");
     r.run(&format!("cd {}", fx.repo.display()));
+}
+
+// ------------------------------------------------ agents: Claude Code /ide (I) --
+
+/// Messages a probe wrote (one JSON per line).
+fn probe_messages(file: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(file).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+}
+
+fn selections(file: &Path) -> Vec<serde_json::Value> {
+    probe_messages(file).into_iter().filter(|m| m["method"] == "selection_changed").map(|m| m["params"].clone()).collect()
+}
+
+impl Runner<'_> {
+    /// Starts an ide-probe in terminal `idx`'s shell (background job).
+    async fn start_probe(&mut self, idx: usize, out: &Path) -> Result<(), String> {
+        let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").map_err(|_| "GRIDTERM_E2E_IDE_PROBE not set")?;
+        let (port, token) = self.read(|ws, _| ws.ide.as_ref().map(|i| (i.port(), i.token().to_string()))).ok_or("IDE server not running")?;
+        let _ = std::fs::remove_file(out);
+        let id = self.read(move |ws, cx| ws.terminals[idx].read(cx).id());
+        let before = self.read(move |ws, _| ws.ide_conns.values().filter(|t| **t == id).count());
+        self.focus_id(id)?;
+        self.next_frame().await;
+        self.next_frame().await;
+        self.run(&format!("{probe} {port} {token} {} &", out.display()));
+        self.wait_until(5000, move |ws, _| ws.ide_conns.values().filter(|t| **t == id).count() > before)
+            .await
+            .ok_or_else(|| format!("probe in terminal {idx} not mapped to its cell: {}", std::fs::read_to_string(out).unwrap_or_default()))?;
+        Ok(())
+    }
+
+    /// Starts an anonymous (opencode-like) ide-probe in terminal `idx`'s
+    /// shell and waits until the app has mapped it to that cell.
+    async fn start_anon_probe(&mut self, idx: usize, out: &Path) -> Result<(), String> {
+        let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").map_err(|_| "GRIDTERM_E2E_IDE_PROBE not set")?;
+        let port = self.read(|ws, _| ws.ide.as_ref().map(|i| i.port())).ok_or("IDE server not running")?;
+        let _ = std::fs::remove_file(out);
+        let id = self.read(move |ws, cx| ws.terminals[idx].read(cx).id());
+        let before = self.read(move |ws, _| ws.ide_conns.values().filter(|t| **t == id).count());
+        self.focus_id(id)?;
+        // A terminal takes keyboard input once painted (e.g. after its file
+        // tabs were closed).
+        self.next_frame().await;
+        self.next_frame().await;
+        self.run(&format!("{probe} {port} - {} &", out.display()));
+        self.wait_until(5000, move |ws, _| ws.ide_conns.values().filter(|t| **t == id).count() > before)
+            .await
+            .ok_or_else(|| {
+                let ps = Command::new("/bin/ps").args(["-axo", "pid,ppid,stat,wchan,command"]).output().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                let probes: Vec<&str> = ps.lines().filter(|l| l.contains("ide-probe") && l.contains(" - ")).collect();
+                format!("anonymous probe in terminal {idx} not mapped: file={:?} procs={probes:?}", std::fs::read_to_string(out).ok())
+            })?;
+        Ok(())
+    }
+
+    /// Waits until `file` has more than `n` selection messages; returns them.
+    async fn wait_selections(&mut self, file: &Path, n: usize, timeout_ms: u64) -> Vec<serde_json::Value> {
+        let start = Instant::now();
+        loop {
+            let s = selections(file);
+            if s.len() > n || start.elapsed() > Duration::from_millis(timeout_ms) {
+                return s;
+            }
+            self.sleep(10).await;
+        }
+    }
+}
+
+async fn ide_cases(r: &mut Runner<'_>, fx: &Fixture) {
+    let dir = fx.base.join("ide");
+    std::fs::create_dir_all(&dir).ok();
+    let file_a = dir.join("a.rs");
+    let file_b = dir.join("b.rs");
+    let lines: String = (1..=20).map(|i| format!("line{i}\n")).collect();
+    write(&file_a, &lines);
+    write(&file_b, "fn b() {}\n");
+    r.close_all_tabs();
+    if r.read(|ws, _| ws.palette_open) {
+        r.with(|ws, w, cx| ws.close_palette(w, cx));
+    }
+    r.with(|ws, _, cx| {
+        ws.zoomed = false;
+        cx.notify();
+    });
+    let n0 = r.n_terms();
+    r.set_count(2, &dir).await;
+    let probe1 = dir.join("probe1.jsonl");
+    let outside = dir.join("outside.jsonl");
+
+    case!(r, "IDE1", "Las terminales reciben CLAUDE_CODE_SSE_PORT = puerto del .lock", {
+        let port = r.read(|ws, _| ws.ide.as_ref().map(|i| i.port())).ok_or("IDE server not running")?;
+        let lock = r.read(|ws, _| ws.ide.as_ref().map(|i| i.lock_path().to_path_buf())).unwrap();
+        r.key("cmd-2");
+        r.run("echo PORT=$CLAUDE_CODE_SSE_PORT=");
+        r.wait_text(1, &format!("PORT={port}="), 3000).await.ok_or_else(|| format!("shell env: {}", r.term_text(1)))?;
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&lock).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        ensure!(lock.file_name().unwrap().to_str() == Some(&format!("{port}.lock")), "lock {lock:?}");
+        ensure!(v["ideName"] == "gridterm" && v["transport"] == "ws", "lock {v}");
+        Ok(format!("puerto {port}, {}", lock.display()))
+    });
+
+    case!(r, "IDE2", "Una conexión desde la celda 2 queda asignada a la celda 2; una de fuera, a ninguna", {
+        r.start_probe(1, &probe1).await?;
+        let id1 = r.read(|ws, cx| ws.terminals[1].read(cx).id());
+        // A probe launched by gridterm itself is not in any cell's shell.
+        let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").unwrap();
+        let (port, token) = r.read(|ws, _| ws.ide.as_ref().map(|i| (i.port(), i.token().to_string()))).unwrap();
+        let _ = std::fs::remove_file(&outside);
+        let child = Command::new(&probe).args([port.to_string(), token, outside.display().to_string()]).spawn().map_err(|e| e.to_string())?;
+        std::fs::write(r.out.join("outside_probe_pid"), child.id().to_string()).ok();
+        let ok = r.wait_until(3000, |_, _| probe_messages(&dir.join("outside.jsonl")).iter().any(|m| m["probe"] == "connected")).await;
+        r.sleep(300).await;
+        let conns: Vec<u64> = r.read(|ws, _| ws.ide_conns.values().copied().collect());
+        ensure!(ok.is_some(), "outside probe did not connect");
+        ensure!(conns == vec![id1], "mapped connections {conns:?}, expected only T{id1}");
+        Ok(format!("celda 2 = T{id1}; la de fuera sin celda"))
+    });
+
+    case!(r, "IDE3", "Abrir un archivo en la celda 2 → selection_changed con filePath y sin texto", {
+        let before = selections(&probe1).len();
+        r.open_in(1, &file_a, None, false);
+        let got = r.wait_selections(&probe1, before, 2000).await;
+        let last = got.last().cloned().unwrap_or_default();
+        ensure!(got.len() > before, "no selection_changed: {:?}", probe_messages(&probe1));
+        ensure!(last["filePath"] == file_a.display().to_string() && last["text"] == "", "{last}");
+        Ok(format!("{}", last))
+    });
+
+    case!(r, "IDE4", "Seleccionar líneas 3–5 en el visor (teclado) → texto exacto y rango, < 300 ms", {
+        let pa = file_a.clone();
+        r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 1, &pa)).await.ok_or("viewer not loaded")?;
+        r.with(|ws, w, cx| crate::cell::focus_cell(&ws.cells[1].clone(), w, cx));
+        r.next_frame().await;
+        r.key("cmd-up");
+        r.key("down");
+        r.key("down");
+        r.next_frame().await;
+        let before = selections(&probe1).len();
+        r.key("shift-down");
+        r.key("shift-down");
+        r.key("shift-end");
+        let t = Instant::now();
+        let start = Instant::now();
+        let mut last = serde_json::Value::Null;
+        while start.elapsed() < Duration::from_millis(2000) {
+            if let Some(s) = selections(&probe1).into_iter().skip(before).last() {
+                if s["text"] == "line3\nline4\nline5" {
+                    last = s;
+                    break;
+                }
+            }
+            r.sleep(5).await;
+        }
+        let took = t.elapsed();
+        ensure!(last != serde_json::Value::Null, "selection not received: {:?}", selections(&probe1).into_iter().skip(before).collect::<Vec<_>>());
+        ensure!(last["selection"]["start"]["line"] == 2 && last["selection"]["end"]["line"] == 4, "{last}");
+        ensure!(took < Duration::from_millis(300), "took {took:?}");
+        Ok(format!("{took:?}: {}", last["selection"]))
+    });
+
+    case!(r, "IDE5", "Volver a la pestaña de la terminal mantiene lo último mostrado (sin limpiar)", {
+        let before = selections(&probe1);
+        let last = before.last().cloned().unwrap_or_default();
+        r.key("escape");
+        r.next_frame().await;
+        let visible = r.read(|ws, cx| ws.cells[1].read(cx).visible_tab());
+        r.sleep(400).await;
+        let after = selections(&probe1);
+        // Re-sends of the same view (sent shortly after connecting) are fine;
+        // a clear or any other content is not.
+        let changed: Vec<_> = after[before.len()..].iter().filter(|m| **m != last).collect();
+        ensure!(visible.is_none(), "terminal tab not shown: {visible:?}");
+        ensure!(changed.is_empty(), "sent {changed:?}");
+        Ok(format!("sin cambios ({} reenvíos de lo mismo)", after.len() - before.len()))
+    });
+
+    case!(r, "IDE6", "Cerrar la pestaña limpia el contexto; con otra pestaña de archivo visible, envía esa", {
+        let before = selections(&probe1).len();
+        r.with(|ws, _, cx| ws.cells[1].update(cx, |c, cx| c.close_tab(0, cx)));
+        let got = r.wait_selections(&probe1, before, 2000).await;
+        let cleared = got.get(before).cloned().unwrap_or_default();
+        ensure!(cleared.get("filePath").is_none() && cleared["text"] == "", "after closing: {cleared}");
+        r.open_in(1, &file_b, None, false);
+        r.open_in(1, &file_a, None, false);
+        r.sleep(300).await;
+        let before = selections(&probe1).len();
+        r.with(|ws, _, cx| ws.cells[1].update(cx, |c, cx| c.close_visible_tab(cx)));
+        let got = r.wait_selections(&probe1, before, 2000).await;
+        let next = got.get(before).cloned().unwrap_or_default();
+        ensure!(next["filePath"] == file_b.display().to_string(), "after closing a.rs: {next}");
+        Ok("limpieza y luego b.rs".into())
+    });
+
+    case!(r, "IDE7", "Lo que se abre en la celda 1 no llega a la conexión de la celda 2 (ni a la de fuera)", {
+        let before = probe_messages(&probe1).len();
+        r.open_in(0, &file_a, None, false);
+        r.sleep(500).await;
+        let leaked: Vec<_> = probe_messages(&probe1).into_iter().skip(before).collect();
+        let outside_sel = selections(&outside);
+        r.close_all_tabs();
+        ensure!(leaked.is_empty(), "cell 2 connection got {leaked:?}");
+        ensure!(outside_sel.is_empty(), "outside connection got {outside_sel:?}");
+        Ok("nada".into())
+    });
+
+    case!(r, "IDE8", "⌥⌘K envía at_mentioned con archivo y líneas; sin conexión, aviso", {
+        r.open_in(1, &file_a, None, false);
+        let pa = file_a.clone();
+        r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 1, &pa)).await.ok_or("viewer not loaded")?;
+        r.with(|ws, w, cx| crate::cell::focus_cell(&ws.cells[1].clone(), w, cx));
+        r.next_frame().await;
+        r.key("cmd-up");
+        r.key("down");
+        r.key("down");
+        r.key("shift-down");
+        r.key("shift-down");
+        r.key("shift-end");
+        r.key("alt-cmd-k");
+        let ok = r.wait_until(2000, |_, _| probe_messages(&dir.join("probe1.jsonl")).iter().any(|m| m["method"] == "at_mentioned")).await;
+        let mention = probe_messages(&probe1).into_iter().find(|m| m["method"] == "at_mentioned").unwrap_or_default();
+        // Cell 1 has no agent: a notice instead.
+        r.open_in(0, &file_b, None, false);
+        let pb = file_b.clone();
+        r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 0, &pb)).await;
+        r.with(|ws, w, cx| crate::cell::focus_cell(&ws.cells[0].clone(), w, cx));
+        r.next_frame().await;
+        let notices = r.notices().len();
+        r.key("alt-cmd-k");
+        r.next_frame().await;
+        let last = r.notices().last().cloned();
+        r.close_all_tabs();
+        ensure!(ok.is_some(), "no at_mentioned: {:?}", probe_messages(&probe1));
+        let p = &mention["params"];
+        ensure!(p["filePath"] == file_a.display().to_string() && p["lineStart"] == 2 && p["lineEnd"] == 4, "{mention}");
+        ensure!(r.notices().len() > notices && last.as_ref().is_some_and(|(m, _)| m.contains("No Claude Code session")), "notice {last:?}");
+        Ok(format!("{p}"))
+    });
+
+    case!(r, "IDE10", "10 conexiones y selección continua: ningún frame > 16 ms; todas reciben la última", {
+        let mut files = Vec::new();
+        for k in 0..9 {
+            let f = dir.join(format!("probe-many-{k}.jsonl"));
+            r.start_probe(1, &f).await?;
+            files.push(f);
+        }
+        files.push(probe1.clone());
+        r.open_in(1, &file_a, None, false);
+        let pa = file_a.clone();
+        r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 1, &pa)).await.ok_or("viewer not loaded")?;
+        let viewer = r.read(|ws, cx| visible_viewer(ws, cx, 1)).ok_or("no viewer")?;
+        let mut last = r.next_frame().await;
+        let mut gap = Duration::ZERO;
+        for k in 0..60u32 {
+            let v = viewer.clone();
+            let start = k % 15;
+            r.with(move |_, _, cx| v.update(cx, |v, cx| v.select_lines(start..=start + 2, cx)));
+            let f = r.next_frame().await;
+            gap = gap.max(f - last);
+            last = f;
+        }
+        // Final selection: lines 15–17 (59 % 15 = 14 → lines 14..=16, 0-based).
+        r.sleep(400).await;
+        let mut stale = Vec::new();
+        for f in &files {
+            let s = selections(f);
+            if s.last().is_none_or(|l| l["selection"]["start"]["line"] != 14) {
+                stale.push(format!("{}: {:?}", f.file_name().unwrap().to_string_lossy(), s.last().map(|l| l["selection"]["start"].clone())));
+            }
+        }
+        r.close_all_tabs();
+        ensure!(stale.is_empty(), "connections without the final selection: {stale:?}");
+        ensure!(gap < Duration::from_millis(16), "max frame gap {gap:?}");
+        Ok(format!("10 conexiones, hueco máx. {gap:?}"))
+    });
+
+    let anon = dir.join("anon.jsonl");
+    let anon_out = dir.join("anon-outside.jsonl");
+    case!(r, "IDE11", "Cliente sin token (como opencode) desde la celda 2: el sistema lo asigna a su celda y recibe la vista", {
+        let t = Instant::now();
+        r.start_anon_probe(1, &anon).await?;
+        let mapped_in = t.elapsed();
+        r.open_in(1, &file_b, None, false);
+        let ok = r.wait_until(2000, |_, _| selections(&dir.join("anon.jsonl")).iter().any(|s| s["filePath"].as_str().is_some_and(|p| p.ends_with("b.rs")))).await;
+        r.close_all_tabs();
+        ensure!(ok.is_some(), "anonymous probe got {:?}", probe_messages(&anon));
+        Ok(format!("asignado en {mapped_in:?} (incluye lanzar el probe), recibe b.rs"))
+    });
+
+    case!(r, "IDE12", "Cliente sin token desde fuera de las celdas: no recibe nada", {
+        let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").unwrap();
+        let port = r.read(|ws, _| ws.ide.as_ref().map(|i| i.port())).unwrap();
+        let _ = std::fs::remove_file(&anon_out);
+        let mut child = Command::new(&probe).args([port.to_string(), "-".into(), anon_out.display().to_string()]).spawn().map_err(|e| e.to_string())?;
+        let connected = r.wait_until(3000, |_, _| probe_messages(&dir.join("anon-outside.jsonl")).iter().any(|m| m["probe"] == "connected")).await;
+        r.sleep(800).await;
+        r.open_in(1, &file_a, None, false);
+        r.sleep(800).await;
+        let got = selections(&anon_out);
+        let conns = r.read(|ws, _| ws.ide_conns.len());
+        let _ = child.kill();
+        let _ = child.wait();
+        r.close_all_tabs();
+        ensure!(connected.is_some(), "outside anonymous probe did not connect");
+        ensure!(got.is_empty(), "outside anonymous client received {got:?}");
+        Ok(format!("conectado pero sin datos; {conns} conexiones asignadas a celdas"))
+    });
+
+    case!(r, "IDE13", "Un token incorrecto se rechaza", {
+        let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").unwrap();
+        let port = r.read(|ws, _| ws.ide.as_ref().map(|i| i.port())).unwrap();
+        let out = Command::new(&probe).args([port.to_string(), "0123456789abcdef0123456789abcdef".into(), dir.join("bad.jsonl").display().to_string()]).output().map_err(|e| e.to_string())?;
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        ensure!(!out.status.success() && err.contains("connect failed"), "status {:?}, stderr {err}", out.status);
+        Ok(err.trim().to_string())
+    });
+
+    case!(r, "IDE9", "Desactivar el ajuste cierra el servidor y borra el .lock; reactivar crea otro", {
+        let lock = r.read(|ws, _| ws.ide.as_ref().map(|i| i.lock_path().to_path_buf())).ok_or("not running")?;
+        let mut cfg = r.read(|ws, _| ws.config.clone());
+        cfg.agents.claude_ide = false;
+        r.with({
+            let cfg = cfg.clone();
+            move |ws, w, cx| ws.apply_config(cfg, w, cx)
+        });
+        let closed = r.wait_until(3000, |_, _| probe_messages(&dir.join("probe1.jsonl")).iter().any(|m| m["probe"] == "closed")).await;
+        let gone = !lock.exists();
+        let running = r.read(|ws, _| ws.ide.is_some());
+        cfg.agents.claude_ide = true;
+        r.with(move |ws, w, cx| ws.apply_config(cfg, w, cx));
+        let new_lock = r.read(|ws, _| ws.ide.as_ref().map(|i| i.lock_path().to_path_buf()));
+        ensure!(!running && gone, "running={running}, lock still there={}", !gone);
+        ensure!(closed.is_some(), "probe connection not closed");
+        ensure!(new_lock.as_ref().is_some_and(|l| l.exists()), "not restarted: {new_lock:?}");
+        std::fs::write(r.out.join("ide_lock_path"), new_lock.unwrap().display().to_string()).ok();
+        Ok("cerrado, .lock borrado, reactivado".into())
+    });
+
+    if let Ok(pid) = std::fs::read_to_string(r.out.join("outside_probe_pid")) {
+        if let Ok(pid) = pid.trim().parse::<i32>() {
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+        }
+    }
+    r.close_all_tabs();
+    r.set_count(n0.max(2), &fx.plain).await;
+    r.key("cmd-1");
+}
+
+/// Optional (`GRIDTERM_E2E_PHASE=claude`): the real Claude Code connects to
+/// gridterm and shows what the cell is viewing. Sends no prompt.
+async fn claude_cases(r: &mut Runner<'_>, fx: &Fixture) {
+    let main_rs = fx.repo.join("src/main.rs");
+    r.key("cmd-1");
+    r.run(&format!("cd {}", fx.repo.display()));
+    r.sleep(300).await;
+    r.open_in(0, &main_rs, None, false);
+    let p = main_rs.clone();
+    r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 0, &p)).await;
+    r.with(|ws, _, cx| ws.cells[0].update(cx, |c, cx| c.show(None, cx)));
+    r.next_frame().await;
+    r.next_frame().await;
+    let id0 = r.read(|ws, cx| ws.terminals[0].read(cx).id());
+
+    case!(r, "CC1", "Claude Code lanzado en la celda se conecta solo a gridterm (ide_connected → su celda)", {
+        r.run("claude");
+        let start = Instant::now();
+        let mut trusted = false;
+        let mapped = loop {
+            if r.read(move |ws, _| ws.ide_conns.values().any(|t| *t == id0)) {
+                break true;
+            }
+            let text = r.term_text(0);
+            // Workspace trust menu (default "No, exit"): pick "Yes".
+            if !trusted && text.contains("Yes, I trust this folder") && text.contains("Enter to confirm") {
+                r.sleep(300).await;
+                r.key("down");
+                r.sleep(150).await;
+                r.key("enter");
+                trusted = true;
+            }
+            if start.elapsed() > Duration::from_secs(40) {
+                break false;
+            }
+            r.sleep(200).await;
+        };
+        r.shot("C1-claude");
+        ensure!(mapped, "not connected after 40 s; terminal:\n{}", r.term_text(0));
+        Ok(format!("conectado en {:?}{}", start.elapsed(), if trusted { " (aceptada la confianza en la carpeta del fixture)" } else { "" }))
+    });
+
+    case!(r, "CC2", "Claude muestra el archivo que se ve en la celda (main.rs)", {
+        let ok = r.wait_text(0, "main.rs", 15000).await;
+        r.shot("C2-in-file");
+        ensure!(ok.is_some(), "indicator not shown; terminal:\n{}", r.term_text(0));
+        let line = r.term_text(0).lines().find(|l| l.contains("main.rs")).unwrap_or_default().trim().to_string();
+        Ok(line)
+    });
+
+    case!(r, "CC3", "Al seleccionar 2 líneas en la pestaña, Claude muestra ⧉ 2 lines selected", {
+        let viewer = r.read(|ws, cx| ws.cells[0].read(cx).tabs().first().map(|t| t.viewer.clone())).ok_or("no tab")?;
+        r.with(move |_, _, cx| viewer.update(cx, |v, cx| v.select_lines(0..=1, cx)));
+        let ok = r.wait_text(0, "2 lines selected", 15000).await;
+        r.shot("C3-selected");
+        ensure!(ok.is_some(), "indicator not shown; terminal:\n{}", r.term_text(0));
+        Ok("⧉ 2 lines selected".into())
+    });
+
+    // Leave Claude.
+    r.key("ctrl-c");
+    r.sleep(300).await;
+    r.key("ctrl-c");
+    r.sleep(1500).await;
+    r.close_all_tabs();
+}
+
+// ------------------------------------------------- agents: MCP server (M) --
+
+impl Runner<'_> {
+    /// Runs `gridterm mcp` from terminal `idx`'s shell with `requests` on its
+    /// stdin; returns its replies.
+    async fn mcp_from_cell(&mut self, idx: usize, dir: &Path, requests: &[serde_json::Value]) -> Result<Vec<serde_json::Value>, String> {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let input = dir.join(format!("mcp-in-{n}.jsonl"));
+        let output = dir.join(format!("mcp-out-{n}.jsonl"));
+        std::fs::write(&input, requests.iter().map(|r| r.to_string() + "\n").collect::<String>()).map_err(|e| e.to_string())?;
+        let id = self.read(move |ws, cx| ws.terminals[idx].read(cx).id());
+        self.focus_id(id)?;
+        self.next_frame().await;
+        self.next_frame().await;
+        let errf = dir.join(format!("mcp-err-{n}.txt"));
+        // The marker is computed by the shell, so it is not in the typed
+        // command line (which the terminal echoes before running it).
+        let marker = format!("MCP_DONE={}=", 1000 + n);
+        self.run(&format!("{} mcp < {} > {} 2> {}; echo MCP_DONE=$((1000+{n}))=$?=", exe.display(), input.display(), output.display(), errf.display()));
+        self.wait_text(idx, &marker, 5000).await.ok_or_else(|| format!("mcp did not finish: {}", self.term_text(idx)))?;
+        let replies: Vec<serde_json::Value> = std::fs::read_to_string(&output).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        if replies.is_empty() {
+            let text = self.term_text(idx).replace('\n', "");
+            let status = text.split(&marker).nth(1).and_then(|t| t.split('=').next()).unwrap_or("?").to_string();
+            return Err(format!("gridterm mcp gave no replies (exit {status}); stderr: {:?}", std::fs::read_to_string(&errf).unwrap_or_default()));
+        }
+        Ok(replies)
+    }
+}
+
+fn mcp_call(id: u32, tool: &str) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":tool,"arguments":{}}})
+}
+
+/// Text of a tool result, parsed as JSON when it is JSON.
+fn tool_text(reply: &serde_json::Value) -> (bool, serde_json::Value) {
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap_or("");
+    let is_error = reply["result"]["isError"] == true;
+    (is_error, serde_json::from_str(text).unwrap_or(serde_json::Value::String(text.to_string())))
+}
+
+async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
+    let dir = fx.base.join("mcp");
+    std::fs::create_dir_all(&dir).ok();
+    let file_a = dir.join("a.rs");
+    write(&file_a, &(1..=20).map(|i| format!("line{i}\n")).collect::<String>());
+    r.close_all_tabs();
+    if r.read(|ws, _| ws.palette_open) {
+        r.with(|ws, w, cx| ws.close_palette(w, cx));
+    }
+    r.with(|ws, _, cx| {
+        ws.zoomed = false;
+        cx.notify();
+    });
+    let n0 = r.n_terms();
+    r.set_count(2, &fx.repo).await;
+    let init = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}});
+
+    case!(r, "M1", "Las terminales reciben GRIDTERM_SOCKET y CLAUDE_CODE_PLUGIN_DIRS; socket 0600", {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (socket, plugin) = r
+            .read(|ws, _| Some((ws.agent_socket.as_ref()?.path().to_path_buf(), ws.agent_files.as_ref()?.plugin_dir.clone())))
+            .ok_or("agent MCP not running")?;
+        r.key("cmd-2");
+        r.next_frame().await;
+        r.run("echo S=$GRIDTERM_SOCKET= P=$CLAUDE_CODE_PLUGIN_DIRS=");
+        let want = format!("S={}= P={}=", socket.display(), plugin.display());
+        let ok = r.wait_until(3000, |ws, cx| ws.terminals[1].read(cx).visible_text().replace('\n', "").contains(&want)).await;
+        let mode = std::fs::metadata(&socket).map(|m| m.permissions().mode() & 0o777).unwrap_or(0);
+        ensure!(ok.is_some(), "shell env: {}", r.term_text(1));
+        ensure!(mode == 0o600, "socket mode {mode:o}");
+        Ok(format!("{} (0600)", socket.display()))
+    });
+
+    case!(r, "M2", "Integración de zsh: tu ZDOTDIR restaurado, tus ficheros cargados, omp y copilot son funciones", {
+        let user_zdotdir = std::env::var("ZDOTDIR").map_err(|_| "e2e runs with an isolated ZDOTDIR")?;
+        let rc = Path::new(&user_zdotdir).join(".zshrc");
+        let had_rc = rc.exists();
+        if !had_rc {
+            std::fs::write(&rc, "export GRIDTERM_E2E_RC=loaded\n").map_err(|e| e.to_string())?;
+        }
+        // A new shell (started after the marker exists).
+        r.with(|ws, w, cx| {
+            let last = ws.terminals.len() - 1;
+            ws.close_terminal_at(last, w, cx)
+        });
+        let d = fx.repo.clone();
+        r.with(move |ws, w, cx| ws.open_terminal_in(Some(d), w, cx));
+        r.wait_until(5000, |ws, cx| ws.terminals.get(1).is_some_and(|t| t.read(cx).child_pid().is_some())).await;
+        // Type once the shell shows its prompt (it has read its startup files).
+        let prompt = r.wait_until(10000, |ws, cx| ws.terminals.get(1).is_some_and(|t| t.read(cx).visible_text().trim_end().ends_with('%'))).await;
+        r.next_frame().await;
+        r.next_frame().await;
+        let prompt_ms = prompt.map(|d| d.as_millis());
+        r.run("echo Z=$ZDOTDIR= R=$GRIDTERM_E2E_RC=; whence -w omp copilot");
+        let ok = r.wait_text(1, "copilot: function", 3000).await;
+        // The cell is narrow: compare without line wraps.
+        let text = r.term_text(1).replace('\n', "");
+        if !had_rc {
+            let _ = std::fs::remove_file(&rc);
+        }
+        ensure!(ok.is_some(), "prompt after {prompt_ms:?} ms; terminal: {text}");
+        ensure!(text.contains(&format!("Z={user_zdotdir}=")), "ZDOTDIR not restored: {text}");
+        ensure!(text.contains("R=loaded="), "user .zshrc not loaded: {text}");
+        ensure!(text.contains("omp: function"), "{text}");
+        Ok(format!("ZDOTDIR={user_zdotdir}, .zshrc cargado, omp/copilot = funciones"))
+    });
+
+    case!(r, "M3", "tools/list desde una celda: get_selection y get_cell_context", {
+        let replies = r.mcp_from_cell(1, &dir, &[init.clone(), serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})]).await?;
+        let names: Vec<String> = replies
+            .get(1)
+            .and_then(|r| r["result"]["tools"].as_array())
+            .map(|t| t.iter().filter_map(|t| t["name"].as_str().map(str::to_owned)).collect())
+            .unwrap_or_default();
+        ensure!(names == ["get_selection", "get_cell_context"], "tools {names:?}; replies {replies:?}");
+        Ok(names.join(", "))
+    });
+
+    case!(r, "M4", "Líneas 3–5 seleccionadas en la celda 2 → get_selection desde la celda 2 devuelve 3–5 y su texto", {
+        r.open_in(1, &file_a, None, false);
+        let pa = file_a.clone();
+        r.wait_until(3000, move |ws, cx| viewer_loaded(ws, cx, 1, &pa)).await.ok_or("viewer not loaded")?;
+        r.with(|ws, w, cx| crate::cell::focus_cell(&ws.cells[1].clone(), w, cx));
+        r.next_frame().await;
+        r.key("cmd-up");
+        r.key("down");
+        r.key("down");
+        r.key("shift-down");
+        r.key("shift-down");
+        r.key("shift-end");
+        r.next_frame().await;
+        r.key("escape"); // back to the terminal tab to run the agent
+        let replies = r.mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_selection")]).await?;
+        let (is_error, sel) = replies.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+        ensure!(!is_error, "error: {sel}");
+        ensure!(sel["file"] == file_a.display().to_string() && sel["start_line"] == 3 && sel["end_line"] == 5 && sel["text"] == "line3\nline4\nline5", "{sel}");
+        Ok(format!("{sel}"))
+    });
+
+    case!(r, "M5", "Celda 1 (sin archivo): file null; fuera de una celda o sin socket: error claro", {
+        let replies = r.mcp_from_cell(0, &dir, &[init.clone(), mcp_call(2, "get_selection")]).await?;
+        let (e0, cell1) = replies.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+        let socket = r.read(|ws, _| ws.agent_socket.as_ref().map(|s| s.path().to_path_buf())).ok_or("no socket")?;
+        // From the runner, not a cell (off the UI thread, which answers).
+        let s = socket.clone();
+        let outside = r.cx.background_executor().spawn(async move { agents::socket::request(&s, "selection") }).await;
+        let mut out = Vec::new();
+        agents::mcp_stdio::run(mcp_call(1, "get_selection").to_string().as_bytes(), &mut out, None);
+        let no_env: serde_json::Value = serde_json::from_slice(&out).map_err(|e| e.to_string())?;
+        ensure!(!e0 && cell1 == serde_json::json!({"file": null}), "cell 1: {cell1}");
+        ensure!(outside.as_ref().is_err_and(|e| e.contains("not running inside a gridterm cell")), "outside: {outside:?}");
+        ensure!(tool_text(&no_env).0, "without socket: {no_env}");
+        Ok("null / «not running inside a gridterm cell» / «GRIDTERM_SOCKET is not set»".into())
+    });
+
+    case!(r, "M6", "get_cell_context: cwd, repo, rama, pestañas y procesos", {
+        r.key("cmd-2");
+        r.next_frame().await;
+        r.run("sleep 300 &");
+        r.sleep(400).await;
+        let replies = r.mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_cell_context")]).await?;
+        let (is_error, c) = replies.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+        r.run("kill %1");
+        let repo = fx.repo.display().to_string();
+        ensure!(!is_error, "error: {c}");
+        ensure!(c["cwd"] == repo.as_str() && c["repo_root"] == repo.as_str() && c["branch"] == "main", "{c}");
+        ensure!(c["viewing"] == file_a.display().to_string(), "viewing {c}");
+        let tabs = c["open_files"].as_array().cloned().unwrap_or_default();
+        ensure!(tabs.len() == 1 && tabs[0]["path"] == file_a.display().to_string() && tabs[0]["visible"] == false, "tabs {tabs:?}");
+        ensure!(c["running"].as_array().is_some_and(|p| p.iter().any(|n| n == "sleep")), "running {}", c["running"]);
+        Ok(format!("{c}"))
+    });
+
+    case!(r, "M9", "Cada consulta por el socket responde en < 50 ms", {
+        let socket = r.read(|ws, _| ws.agent_socket.as_ref().map(|s| s.path().to_path_buf())).ok_or("no socket")?;
+        let mut worst = Duration::ZERO;
+        for _ in 0..20 {
+            let s = socket.clone();
+            let t = Instant::now();
+            // From the runner (not a cell): the answer still goes through
+            // the app's UI thread.
+            let task = r.cx.background_executor().spawn(async move { agents::socket::request(&s, "selection") });
+            let _ = task.await;
+            worst = worst.max(t.elapsed());
+        }
+        ensure!(worst < Duration::from_millis(50), "worst {worst:?}");
+        Ok(format!("peor {worst:?}"))
+    });
+
+    case!(r, "M7", "Desactivar el ajuste quita el socket y las llamadas dan error; reactivar funciona", {
+        let socket = r.read(|ws, _| ws.agent_socket.as_ref().map(|s| s.path().to_path_buf())).ok_or("no socket")?;
+        let mut cfg = r.read(|ws, _| ws.config.clone());
+        cfg.agents.mcp = false;
+        r.with({
+            let cfg = cfg.clone();
+            move |ws, w, cx| ws.apply_config(cfg, w, cx)
+        });
+        let gone = !socket.exists();
+        let off = r.mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_selection")]).await?;
+        let (off_err, off_text) = off.get(1).map(tool_text).unwrap_or((false, serde_json::Value::Null));
+        cfg.agents.mcp = true;
+        r.with(move |ws, w, cx| ws.apply_config(cfg, w, cx));
+        let on = r.mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_selection")]).await?;
+        let (on_err, on_text) = on.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+        ensure!(gone, "socket still exists after disabling");
+        ensure!(off_err, "call while disabled: {off_text}");
+        ensure!(!on_err && on_text["file"] == file_a.display().to_string(), "after enabling: {on_text}");
+        let path = r.read(|ws, _| ws.agent_socket.as_ref().map(|s| s.path().display().to_string())).unwrap_or_default();
+        std::fs::write(r.out.join("agent_socket_path"), path).ok();
+        Ok(format!("apagado: «{}»; encendido: ok", off_text.as_str().unwrap_or("")))
+    });
+
+    r.close_all_tabs();
+    r.set_count(n0.max(2), &fx.plain).await;
+    r.key("cmd-1");
+}
+
+/// Optional (`GRIDTERM_E2E_PHASE=agents`): the real agents, typed by name in
+/// a cell, load gridterm's context without any configuration. Sends no
+/// prompt. Run without the isolated lock/socket dirs.
+async fn agents_cases(r: &mut Runner<'_>, fx: &Fixture) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let global = |home: &str| -> Vec<(String, String)> {
+        let claude_mcp = std::fs::read_to_string(format!("{home}/.claude.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .map(|v| v["mcpServers"].to_string())
+            .unwrap_or_default();
+        let mut out = vec![("~/.claude.json mcpServers".to_string(), claude_mcp)];
+        for f in [".omp/agent/mcp.json", ".copilot/mcp-config.json", ".config/opencode/opencode.jsonc"] {
+            out.push((format!("~/{f}"), std::fs::read(format!("{home}/{f}")).map(|b| format!("{} bytes, {:x}", b.len(), b.iter().fold(0u64, |h, x| h.wrapping_mul(31).wrapping_add(*x as u64)))).unwrap_or_else(|_| "absent".into())));
+        }
+        out
+    };
+    let before = global(&home);
+    let readme = fx.repo.join("README.md");
+    // GRIDTERM_E2E_AGENTS=opencode,omp runs only those agents.
+    let only = std::env::var("GRIDTERM_E2E_AGENTS").ok();
+    let want = |name: &str| only.as_deref().is_none_or(|o| o.split(',').any(|a| a == name));
+    // A fresh cell in the fixture repo for each agent.
+    let fresh = |r: &mut Runner<'_>| {
+        let d = fx.repo.clone();
+        r.with(move |ws, w, cx| {
+            while ws.terminals.len() > 1 {
+                let last = ws.terminals.len() - 1;
+                ws.close_terminal_at(last, w, cx);
+            }
+            ws.open_terminal_in(Some(d), w, cx);
+        });
+    };
+    let flat = |r: &mut Runner<'_>| r.term_text(1).replace('\n', " ");
+    async fn ready(r: &mut Runner<'_>) {
+        r.wait_until(5000, |ws, cx| ws.terminals.get(1).is_some_and(|t| t.read(cx).child_pid().is_some())).await;
+        r.sleep(800).await;
+        r.next_frame().await;
+        r.next_frame().await;
+    }
+    /// Waits for `needle` in terminal 2, pressing `answer` once if `prompt`
+    /// shows up first (trust dialogs).
+    async fn wait_for(r: &mut Runner<'_>, needle: &str, prompt: Option<(&str, &[&str])>, secs: u64) -> bool {
+        let start = Instant::now();
+        let mut answered = false;
+        while start.elapsed() < Duration::from_secs(secs) {
+            let text = r.term_text(1).replace('\n', " ");
+            if text.contains(needle) {
+                return true;
+            }
+            if let Some((p, keys)) = prompt {
+                if !answered && text.contains(p) {
+                    r.sleep(300).await;
+                    for k in keys {
+                        r.key(k);
+                        r.sleep(150).await;
+                    }
+                    answered = true;
+                }
+            }
+            r.sleep(200).await;
+        }
+        false
+    }
+
+    if want("claude") { case!(r, "AG1", "Claude Code en una celda: /mcp muestra gridterm conectado (sin configurar nada)", {
+        fresh(r);
+        ready(r).await;
+        r.run("claude");
+        let up = wait_for(r, "? for shortcuts", Some(("Yes, I trust this folder", &["down", "enter"])), 40).await;
+        r.type_text("/mcp");
+        r.sleep(400).await;
+        r.key("enter");
+        let ok = wait_for(r, "gridterm", None, 20).await;
+        r.sleep(1500).await;
+        r.shot("AG1-claude-mcp");
+        let text = flat(r);
+        ensure!(up || ok, "claude did not start: {text}");
+        ensure!(ok, "gridterm not in /mcp: {text}");
+        let line = text.split("gridterm").nth(1).unwrap_or("").chars().take(60).collect::<String>();
+        Ok(format!("gridterm{line}"))
+    }); }
+
+    if want("opencode") { case!(r, "AG2", "opencode en una celda: se conecta por /ide a su celda y recibe el archivo mostrado", {
+        fresh(r);
+        ready(r).await;
+        r.open_in(1, &readme, None, false);
+        r.with(|ws, _, cx| ws.cells[1].update(cx, |c, cx| c.show(None, cx)));
+        r.next_frame().await;
+        r.next_frame().await;
+        let id = r.read(|ws, cx| ws.terminals[1].read(cx).id());
+        // opencode hides its editor label in narrow terminals (< ~100
+        // columns, measured): zoom the cell so the label can show.
+        r.key("cmd-2");
+        r.key("cmd-shift-enter");
+        r.next_frame().await;
+        r.next_frame().await;
+        let cols = r.read(|ws, cx| ws.terminals[1].read(cx).grid_size().0);
+        r.run("opencode");
+        let mapped = r.wait_until(30000, move |ws, _| ws.ide_conns.values().any(|t| *t == id)).await;
+        r.sleep(3000).await;
+        r.shot("AG2-opencode");
+        ensure!(mapped.is_some(), "opencode not connected to its cell; terminal: {}", flat(r));
+        // Select README's first line in the cell's tab: opencode shows it.
+        let viewer = r.read(|ws, cx| ws.cells[1].read(cx).tabs().first().map(|t| t.viewer.clone())).ok_or("no tab")?;
+        r.with(move |_, _, cx| viewer.update(cx, |v, cx| v.select_lines(0..=0, cx)));
+        let shown = wait_for(r, "README", None, 15).await;
+        r.shot("AG2-opencode-selection");
+        let text = flat(r);
+        ensure!(shown, "selection not shown by opencode: {text}");
+        let around = text.find("README").map(|i| text[i.saturating_sub(30)..(i + 40).min(text.len())].trim().to_string()).unwrap_or_default();
+        r.key("cmd-shift-enter");
+        Ok(format!("conectado a su celda en {:?}; con 1 línea seleccionada ({cols} columnas) muestra «{around}»", mapped.unwrap()))
+    }); }
+
+    if want("omp") { case!(r, "AG3", "omp en una celda: /mcp list muestra gridterm conectado", {
+        fresh(r);
+        ready(r).await;
+        r.run("omp");
+        r.sleep(6000).await;
+        r.type_text("/mcp list");
+        r.sleep(500).await;
+        r.key("enter");
+        let ok = wait_for(r, "gridterm:gridterm", None, 20).await;
+        r.sleep(1000).await;
+        r.shot("AG3-omp-mcp");
+        let text = flat(r);
+        ensure!(ok, "gridterm not listed: {text}");
+        let line = text.split("gridterm:gridterm").nth(1).unwrap_or("").chars().take(50).collect::<String>();
+        Ok(format!("gridterm:gridterm{line}"))
+    }); }
+
+    if want("copilot") { case!(r, "AG4", "Copilot CLI en una celda: /mcp muestra gridterm", {
+        fresh(r);
+        ready(r).await;
+        r.run("copilot");
+        let up = wait_for(r, "/ commands", Some(("Do you trust the files in this folder?", &["1"])), 40).await;
+        r.sleep(3000).await;
+        r.type_text("/mcp");
+        r.sleep(500).await;
+        r.key("enter");
+        let ok = wait_for(r, "mcp:gridterm", None, 20).await;
+        r.sleep(1000).await;
+        r.shot("AG4-copilot-mcp");
+        let text = flat(r);
+        ensure!(up || ok, "copilot did not start: {text}");
+        ensure!(ok, "gridterm not in /mcp: {text}");
+        Ok("mcp:gridterm".into())
+    }); }
+
+    fresh(r);
+    r.sleep(1500).await;
+    case!(r, "AG5", "La configuración global de los agentes no ha cambiado", {
+        let after = global(&home);
+        let changed: Vec<_> = before.iter().zip(&after).filter(|(b, a)| b != a).map(|(b, a)| format!("{}: {} → {}", b.0, b.1, a.1)).collect();
+        ensure!(changed.is_empty(), "changed: {changed:?}");
+        Ok(after.iter().map(|(k, v)| format!("{k}: {}", if v.len() > 40 { "sin cambios" } else { v.as_str() })).collect::<Vec<_>>().join("; "))
+    });
 }

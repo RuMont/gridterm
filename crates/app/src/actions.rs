@@ -35,6 +35,7 @@ gpui_kit::actions!(
         PrevTab,
         ShowTerminalTab,
         CancelShrink,
+        SendToAgent,
     ]
 );
 
@@ -80,6 +81,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-]", NextTab, None),
         KeyBinding::new("cmd-shift-[", PrevTab, None),
         KeyBinding::new("escape", ShowTerminalTab, Some(crate::viewer::VIEWER_CONTEXT)),
+        KeyBinding::new("alt-cmd-k", SendToAgent, Some(crate::viewer::VIEWER_CONTEXT)),
         KeyBinding::new("cmd-c", term::Copy, t),
         KeyBinding::new("cmd-v", term::Paste, t),
         KeyBinding::new("cmd-k", term::Clear, t),

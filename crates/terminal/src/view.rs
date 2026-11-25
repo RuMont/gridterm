@@ -46,6 +46,8 @@ pub struct TerminalSettings {
     pub shell: Option<String>,
     /// Blink the cursor of the focused terminal (programs may override).
     pub cursor_blink: bool,
+    /// Extra environment for new shells (e.g. the agent integration port).
+    pub extra_env: Vec<(String, String)>,
 }
 
 impl Default for TerminalSettings {
@@ -59,6 +61,7 @@ impl Default for TerminalSettings {
             scrollback: 10_000,
             shell: None,
             cursor_blink: true,
+            extra_env: Vec::new(),
         }
     }
 }
@@ -159,7 +162,12 @@ impl TerminalView {
 
         // Spawning (fork/exec of the login shell) happens off the UI thread so
         // the cell appears immediately.
-        let spawn_opts = SpawnOptions { shell: settings.shell.clone(), cwd: cwd.clone(), scrollback: settings.scrollback };
+        let spawn_opts = SpawnOptions {
+            shell: settings.shell.clone(),
+            cwd: cwd.clone(),
+            scrollback: settings.scrollback,
+            extra_env: settings.extra_env.clone(),
+        };
         let spawn_term = term.clone();
         let spawn = cx.background_spawn(async move { Pty::spawn(spawn_term, listener, &spawn_opts, size, id) });
         let spawn_task = cx.spawn(async move |this, cx| {

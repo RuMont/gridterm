@@ -69,7 +69,7 @@ max_content_results = 2000   # límite de líneas en la búsqueda por contenido
 theme = "dark"               # o "light"
 ```
 
-`GRIDTERM_CONFIG_DIR` sustituye a `~/.config/gridterm` (lo usan las pruebas).
+`GRIDTERM_CONFIG_DIR` sustituye a `~/.config/gridterm` (lo usan las pruebas). `GRIDTERM_IDE_LOCK_DIR` sustituye a `~/.claude/ide` para el `.lock` de la integración con Claude Code (las pruebas lo aíslan así).
 
 ## Arquitectura
 
@@ -86,6 +86,34 @@ crates/
 **Contexto activo.** Cuando cambia el foco, y cada 500 ms (solo en la terminal activa), se lee el cwd del proceso en primer plano (`tcgetpgrp` + `proc_pidinfo`). La raíz del repo se busca subiendo hasta un `.git`, unos pocos `stat` sin abrir el repositorio. Los paneles solo se recargan si cambia esa raíz. El botón 📌 fija el contexto. Las terminales inactivas actualizan su cabecera solo cuando emiten salida.
 
 **Nuevas terminales y tamaño del grid.** Mientras el grid tenga hueco, la siguiente celda vacía muestra un **+**. Al pulsarlo (o con ⌘T, o con el botón de la barra lateral) se abre el selector de carpetas de macOS y la terminal se abre en la carpeta elegida; cancelar no hace nada. Con el grid lleno no hay **+** y ⌘T solo avisa. Al reducir columnas o filas en Ajustes, si alguna terminal queda fuera (las últimas en orden, porque el grid se rellena en orden) aparece un diálogo de confirmación que las lista, marca en rojo las que tienen procesos en marcha (el trabajo en primer plano, o jobs en segundo plano) y vela sus celdas. Solo al confirmar se cierran (sus procesos mueren) y se aplica el tamaño nuevo; Esc o Cancelar lo dejan todo igual.
+
+**Agentes: Claude Code `/ide`.** gridterm actúa como «IDE» para Claude Code, con el mismo protocolo que usan VS Code y JetBrains (no está documentado; probado con Claude Code 2.1.331). Un `claude` lanzado en una celda se conecta solo, porque cada shell recibe `CLAUDE_CODE_SSE_PORT`. `/ide` también lo muestra como «gridterm».
+
+Desde ese momento Claude sabe qué archivo se está viendo **en su celda**: la última pestaña de archivo mostrada, aunque hayas vuelto a la pestaña de la terminal para escribirle. Si hay líneas seleccionadas en esa pestaña, sabe cuáles (`⧉ 3 lines selected`). Con ⌥⌘K en el visor se inserta `@archivo#Lx-y` en su prompt.
+
+No se comparten las pestañas de otras celdas ni el texto de la terminal. Las ediciones se siguen aprobando en la terminal: gridterm no implementa el diff en el IDE.
+
+Por dentro, gridterm escucha solo en `127.0.0.1`, con un token aleatorio, y publica `~/.claude/ide/<puerto>.lock` con permisos 0600; el fichero se borra al salir. Se desactiva en Ajustes → Agents, o con `[agents] claude_ide = false`.
+
+**Agentes: servidor MCP.** Los agentes que se abren en una celda reciben herramientas MCP de gridterm **sin configurar nada** (sin `mcp add`). Las herramientas son de solo lectura y siempre sobre la celda del agente:
+
+- `get_selection`: el archivo que se ve en la celda y las líneas seleccionadas (desde 1, con su texto).
+- `get_cell_context`: cwd, repositorio y rama, procesos en marcha, archivo visto y pestañas abiertas.
+
+Cómo llega a cada agente (probado con estas versiones):
+
+| Agente | Mecanismo |
+|---|---|
+| Claude Code 2.1.331 | Variable `CLAUDE_CODE_PLUGIN_DIRS`, que apunta a un plugin generado por gridterm. |
+| omp 19.1.1 | `--plugin-dir`, añadido por la integración de zsh. |
+| Copilot CLI 1.0.115 | `--additional-mcp-config`, añadido por la integración de zsh. |
+| opencode 2.2.5 | No usa MCP: va por el protocolo `/ide`, como Claude, y la selección le llega sola. La muestra en su barra si la terminal tiene unas 100 columnas o más (por ejemplo, con la celda en zoom). |
+
+La integración de zsh es la técnica de VS Code y Ghostty. gridterm arranca zsh con su propio `ZDOTDIR`; su `.zshenv` restaura el tuyo y carga **tus** ficheros como siempre, sin modificarlos. Después define las funciones `omp` y `copilot`, que añaden la opción solo al lanzar el agente, nunca a sus subcomandos (`omp config`, `copilot mcp`…). Si defines tu propio `omp` o `copilot`, prevalece el tuyo. En bash y fish no hay integración, así que solo funcionan Claude Code y opencode.
+
+`gridterm mcp` (el mismo ejecutable) es el servidor MCP. Pregunta a la app por un socket Unix privado (`GRIDTERM_SOCKET`), y la app identifica el proceso que pregunta por el sistema, no por lo que diga el cliente. Así un agente solo puede ver su celda, y fuera de gridterm las herramientas responden «not running inside a gridterm cell».
+
+La configuración global de los agentes (`~/.claude.json`, `~/.omp/agent/mcp.json`, `~/.copilot/mcp-config.json`, la de opencode) no se toca. Los ficheros generados están en `~/.config/gridterm/agents/`. Se desactiva en Ajustes → Agents o con `[agents] mcp = false`.
 
 **Archivos como pestañas.** Cada celda del grid es una terminal más los archivos abiertos desde ella: el Explorer y la búsqueda muestran la carpeta de la terminal activa, así que un archivo pertenece a la terminal que estaba activa al abrirlo (o a la terminal donde se hizo ⌘-clic). El grid sigue contando solo terminales. Al enfocar un archivo, su terminal pasa a ser la activa y las herramientas no cambian de carpeta. Una terminal oculta tras una pestaña sigue viva pero no se repinta; si emite salida, su pestaña muestra un punto.
 

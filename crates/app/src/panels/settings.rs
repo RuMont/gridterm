@@ -139,6 +139,25 @@ impl Render for SettingsPanel {
             .child(self.toggle("light", "Light theme", c.ui.theme == config::ThemeMode::Light, cx, |c| {
                 c.ui.theme = if c.ui.theme == config::ThemeMode::Light { config::ThemeMode::Dark } else { config::ThemeMode::Light }
             }))
+            .child(section_header("Agents", None))
+            .child(self.toggle("claude-ide", "Claude Code /ide integration", c.agents.claude_ide, cx, |c| c.agents.claude_ide = !c.agents.claude_ide))
+            .child(
+                div()
+                    .px_3()
+                    .pb_2()
+                    .text_xs()
+                    .text_color(rgb(theme::overlay0()))
+                    .child("Claude Code and opencode running in a cell see the file shown in that cell and its selection (⌥⌘K sends it to the prompt)."),
+            )
+            .child(self.toggle("agents-mcp", "MCP tools for agents in cells", c.agents.mcp, cx, |c| c.agents.mcp = !c.agents.mcp))
+            .child(
+                div()
+                    .px_3()
+                    .pb_2()
+                    .text_xs()
+                    .text_color(rgb(theme::overlay0()))
+                    .child("Agents opened in a cell (Claude Code, omp, Copilot CLI) load gridterm's MCP tools automatically: get_selection and get_cell_context."),
+            )
             .child(section_header("Git", None))
             .child(self.toggle("rebase", "Pull with rebase", c.git.pull_rebase, cx, |c| c.git.pull_rebase = !c.git.pull_rebase))
             .child(

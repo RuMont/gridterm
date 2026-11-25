@@ -20,7 +20,12 @@ pub const TAB_BAR_HEIGHT: f32 = 24.0;
 pub enum CellEvent {
     /// A file viewer of this cell received focus.
     Focused,
+    /// What an agent in this cell sees changed (shown file or selection).
+    ViewChanged,
 }
+
+/// Selection moves are reported to agents after this quiet period.
+const AGENT_VIEW_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub struct FileTab {
     pub viewer: Entity<FileViewer>,
@@ -51,6 +56,10 @@ pub struct CellView {
     pub(crate) bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     pub(crate) body_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     pub(crate) activity_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+    /// Last file tab shown: what an agent in this cell sees, even after
+    /// switching back to the terminal tab to talk to it.
+    last_viewed: Option<Entity<FileViewer>>,
+    view_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -84,6 +93,8 @@ impl CellView {
             bounds: Default::default(),
             body_bounds: Default::default(),
             activity_bounds: Default::default(),
+            last_viewed: None,
+            view_task: None,
             _subscriptions: vec![observe],
         }
     }
@@ -136,8 +147,16 @@ impl CellView {
 
     fn new_viewer(&mut self, path: PathBuf, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) -> Entity<FileViewer> {
         let viewer = cx.new(|cx| FileViewer::new(path, line, window, cx));
-        let sub = cx.subscribe(&viewer, |_, _, event: &ViewerEvent, cx| match event {
+        let sub = cx.subscribe(&viewer, |this, viewer, event: &ViewerEvent, cx| match event {
             ViewerEvent::Focused => cx.emit(CellEvent::Focused),
+            ViewerEvent::SelectionChanged => {
+                if this.last_viewed.as_ref() == Some(&viewer) {
+                    this.view_task = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(AGENT_VIEW_DEBOUNCE).await;
+                        let _ = this.update(cx, |_, cx| cx.emit(CellEvent::ViewChanged));
+                    }));
+                }
+            }
         });
         self._subscriptions.push(sub);
         viewer
@@ -152,7 +171,47 @@ impl CellView {
             self.seen_batches = self.terminal.read(cx).output_batches();
         }
         self.visible = index;
+        if let Some(viewer) = self.visible_viewer().cloned() {
+            self.set_last_viewed(Some(viewer), cx);
+        }
         cx.notify();
+    }
+
+    /// What an agent in this cell sees.
+    pub fn agent_view(&self, cx: &App) -> agents::ide::Selection {
+        match &self.last_viewed {
+            Some(v) => v.read(cx).agent_selection(cx),
+            None => agents::ide::Selection::cleared(),
+        }
+    }
+
+    /// Context of this cell for an agent running in it (`get_cell_context`).
+    pub fn agent_context(&self, cx: &App) -> serde_json::Value {
+        let t = self.terminal.read(cx);
+        let cwd = t.cwd().cloned();
+        let repo_root = cwd.as_deref().and_then(crate::workspace::find_repo_root);
+        let viewing = self.last_viewed.as_ref().map(|v| v.read(cx).path().display().to_string());
+        serde_json::json!({
+            "terminal": t.id(),
+            "cwd": cwd.as_ref().map(|p| p.display().to_string()),
+            "repo_root": repo_root.as_ref().map(|p| p.display().to_string()),
+            "branch": repo_root.as_deref().and_then(git_branch),
+            "running": t.running_processes(),
+            "viewing": viewing,
+            "open_files": self.tabs.iter().enumerate().map(|(i, tab)| serde_json::json!({
+                "path": tab.viewer.read(cx).path().display().to_string(),
+                "preview": tab.preview,
+                "visible": self.visible == Some(i),
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    fn set_last_viewed(&mut self, viewer: Option<Entity<FileViewer>>, cx: &mut Context<Self>) {
+        if self.last_viewed != viewer {
+            self.last_viewed = viewer;
+            self.view_task = None;
+            cx.emit(CellEvent::ViewChanged);
+        }
     }
 
     /// Cycles through terminal + file tabs.
@@ -167,7 +226,11 @@ impl CellView {
         if index >= self.tabs.len() {
             return;
         }
-        self.tabs.remove(index);
+        let removed = self.tabs.remove(index);
+        if self.last_viewed.as_ref() == Some(&removed.viewer) {
+            // Falls back to the file tab shown next, if any (see `show`).
+            self.set_last_viewed(None, cx);
+        }
         let visible = match self.visible {
             // Closing the visible tab shows its left neighbour (the terminal
             // is the leftmost tab).
@@ -397,4 +460,23 @@ impl Render for CellView {
                     .child(body),
             )
     }
+}
+
+/// Current branch of the repository at `root` (short sha when detached),
+/// read from `.git/HEAD` (also for worktrees, whose `.git` is a file).
+fn git_branch(root: &Path) -> Option<String> {
+    let dot_git = root.join(".git");
+    let git_dir = if dot_git.is_file() {
+        let text = std::fs::read_to_string(&dot_git).ok()?;
+        let dir = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        if dir.is_absolute() { dir } else { root.join(dir) }
+    } else {
+        dot_git
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    Some(match head.strip_prefix("ref: refs/heads/") {
+        Some(branch) => branch.to_string(),
+        None => head.chars().take(8).collect(),
+    })
 }

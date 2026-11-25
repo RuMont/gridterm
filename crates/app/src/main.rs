@@ -12,6 +12,12 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
 fn main() {
+    // `gridterm mcp`: MCP server over stdio for agents started in a cell.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        let socket = std::env::var_os(agents::socket::SOCKET_ENV).map(std::path::PathBuf::from);
+        agents::mcp_stdio::run(std::io::stdin().lock(), std::io::stdout().lock(), socket);
+        return;
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let config = config::Config::load();
 

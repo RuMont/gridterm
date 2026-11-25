@@ -11,6 +11,25 @@ pub struct Config {
     pub ui: UiConfig,
     pub git: GitConfig,
     pub search: SearchConfig,
+    pub agents: AgentsConfig,
+}
+
+/// Integrations for coding agents running in the terminals.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentsConfig {
+    /// Act as an IDE for Claude Code (`/ide`): a Claude session in a cell
+    /// sees the file shown in that cell and its selection.
+    pub claude_ide: bool,
+    /// Agents started in a cell (Claude Code, omp, Copilot CLI) load
+    /// gridterm's MCP server (`gridterm mcp`) automatically.
+    pub mcp: bool,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self { claude_ide: true, mcp: true }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

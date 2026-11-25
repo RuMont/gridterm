@@ -134,7 +134,12 @@ pub enum ViewerState {
 pub enum ViewerEvent {
     /// The viewer (or its editor) received focus.
     Focused,
+    /// The selection or cursor moved (what an agent sees changed).
+    SelectionChanged,
 }
+
+/// Most selected text sent to an agent (the rest is cut).
+const MAX_AGENT_SELECTION: usize = 1 << 20;
 
 pub struct FileViewer {
     path: PathBuf,
@@ -152,6 +157,8 @@ pub struct FileViewer {
     /// Time from load start to the text being set in the editor.
     pub(crate) last_load: Option<Duration>,
     load_task: Option<Task<()>>,
+    /// Selection and cursor last reported (byte range, cursor).
+    last_selection: (std::ops::Range<usize>, usize),
     _watcher: Option<FileWatcher>,
     _watch_task: Option<Task<()>>,
 }
@@ -176,6 +183,16 @@ impl FileViewer {
         });
         let focus_handle = cx.focus_handle();
         cx.on_focus_in(&focus_handle, window, |_, _, cx| cx.emit(ViewerEvent::Focused)).detach();
+        // The editor notifies on any change; report only selection/cursor moves.
+        cx.observe(&editor, |this: &mut Self, editor, cx| {
+            let e = editor.read(cx);
+            let now = (e.selected_range(), e.cursor());
+            if now != this.last_selection {
+                this.last_selection = now;
+                cx.emit(ViewerEvent::SelectionChanged);
+            }
+        })
+        .detach();
 
         // Reload when the file changes on disk (debounced on a background thread).
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
@@ -206,6 +223,7 @@ impl FileViewer {
             loads: 0,
             last_load: None,
             load_task: None,
+            last_selection: (0..0, 0),
             _watcher: watcher,
             _watch_task: Some(watch_task),
         };
@@ -215,6 +233,50 @@ impl FileViewer {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// What an agent sees of this viewer: the selection (0-based lines and
+    /// characters, with its text) or, with nothing selected, the file and
+    /// the cursor line.
+    pub fn agent_selection(&self, cx: &App) -> agents::ide::Selection {
+        let e = self.editor.read(cx);
+        if self.state != ViewerState::Text {
+            return agents::ide::Selection::opened(&self.path, 0);
+        }
+        let text = e.text();
+        let range = e.selected_range();
+        let pos = |offset: usize| {
+            let p = text.offset_to_position(offset);
+            (p.line, p.character)
+        };
+        if range.is_empty() {
+            return agents::ide::Selection::opened(&self.path, pos(e.cursor()).0);
+        }
+        let mut selected = text.slice(range.clone()).to_string();
+        if selected.len() > MAX_AGENT_SELECTION {
+            let mut cut = MAX_AGENT_SELECTION;
+            while !selected.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            selected.truncate(cut);
+        }
+        agents::ide::Selection {
+            file_path: Some(self.path.display().to_string()),
+            start: pos(range.start),
+            end: pos(range.end),
+            text: selected,
+        }
+    }
+
+    /// Selects `lines` (0-based, end inclusive) like a user would (e2e).
+    #[cfg(feature = "e2e")]
+    pub(crate) fn select_lines(&mut self, lines: std::ops::RangeInclusive<u32>, cx: &mut Context<Self>) {
+        self.editor.update(cx, |e, cx| {
+            let text = e.text();
+            let start = text.position_to_offset(&Position::new(*lines.start(), 0));
+            let end = text.position_to_offset(&Position::new(lines.end() + 1, 0));
+            e.set_selected_range(start..end, cx);
+        });
     }
 
     #[cfg_attr(not(feature = "e2e"), allow(dead_code))]

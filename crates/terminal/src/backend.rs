@@ -66,6 +66,8 @@ pub struct SpawnOptions {
     pub shell: Option<String>,
     pub cwd: Option<PathBuf>,
     pub scrollback: usize,
+    /// Added to the shell's environment.
+    pub extra_env: Vec<(String, String)>,
 }
 
 /// Handle to the running child process. Created off the UI thread.
@@ -90,6 +92,9 @@ impl Pty {
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
         env.insert("TERM_PROGRAM".into(), "gridterm".into());
+        for (k, v) in &opts.extra_env {
+            env.insert(k.clone(), v.clone());
+        }
         // GUI apps get no LANG; without a UTF-8 locale shells mangle non-ASCII
         // input (é → <0xc3><0xa9>). Use the macOS locale, like Terminal.app.
         if std::env::var_os("LANG").is_none() {
