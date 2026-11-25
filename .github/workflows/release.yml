@@ -35,7 +35,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build and package
         id: package
-        run: echo "zip=$(scripts/package.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+        run: |
+          zip="$(scripts/package.sh "$GITHUB_REF_NAME")"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

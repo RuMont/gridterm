@@ -2,7 +2,7 @@
 # Builds target/release/bundle/gridterm.app (ad-hoc signed).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source "$HOME/.cargo/env" 2>/dev/null || true
+if [[ -f "$HOME/.cargo/env" ]]; then source "$HOME/.cargo/env"; fi
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 cargo build --release -p gridterm
 APP=target/release/bundle/gridterm.app

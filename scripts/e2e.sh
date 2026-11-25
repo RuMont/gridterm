@@ -4,7 +4,7 @@
 # The app runs with an isolated config dir and a zsh without user rc files.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-source "$HOME/.cargo/env" 2>/dev/null || true
+if [[ -f "$HOME/.cargo/env" ]]; then source "$HOME/.cargo/env"; fi
 OUT="${1:-$(mktemp -d /tmp/gridterm-e2e.XXXX)}"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 CFG="$OUT/config"; ZD="$OUT/zdotdir"
