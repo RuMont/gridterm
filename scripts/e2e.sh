@@ -97,6 +97,7 @@ rm -f "$CFG/session.toml"
 
 echo "== E0 closing the last cell"
 run_app empty 60 || echo "empty phase timed out"
+run_app external 90 || echo "external phase timed out"
 rm -f "$CFG/session.toml"
 
 echo "== F2 bundle"
@@ -126,7 +127,7 @@ rows = []
 def load(name):
     p = os.path.join(out, name)
     return json.load(open(p)) if os.path.exists(p) else []
-for c in load("results.json") + load("results_restore.json") + load("results_startup.json") + load("results_empty.json"):
+for c in load("results.json") + load("results_restore.json") + load("results_startup.json") + load("results_empty.json") + load("results_external.json"):
     rows.append((c["id"], c["name"], "PASS" if c["pass"] else "FAIL", c["detail"].replace("\n", " ")[:160], "e2e"))
 for line in open(os.path.join(out, "script_results.tsv")):
     i, n, st, d = line.rstrip("\n").split("\t")

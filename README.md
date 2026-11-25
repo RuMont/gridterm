@@ -18,6 +18,20 @@ scripts/bundle.sh              # target/release/bundle/gridterm.app
 
 Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, terminal activa y ancho del sidebar) en `~/.config/gridterm/session.toml`, y se restaura al abrir. La primera vez (sin sesión) la app abre el selector de carpetas de macOS para la primera terminal; si lo cancelas, el grid queda vacío con la celda **+**.
 
+## Abrir desde fuera (gridterm como terminal por defecto)
+
+- **Finder**: gridterm aparece en *Abrir con* para scripts (`.command`, `.tool`, `.sh`, `.bash`, `.zsh`…), ejecutables Unix y carpetas. Un script o ejecutable se ejecuta en una terminal nueva en su carpeta y, al acabar, queda la shell con su salida; una carpeta abre una terminal en ella. Lo mismo al soltarlos sobre el icono del Dock o con `open -a gridterm <ruta>`.
+- **Como terminal por defecto**: macOS no tiene ese ajuste; lo que cuenta es la app asociada a cada tipo. En Finder, *Obtener información* de un `.command` (y de un `.sh`, o de un ejecutable) → *Abrir con* → gridterm → *Cambiar todo*. gridterm se declara como alternativa, así que Terminal sigue siendo la predeterminada hasta que lo cambies.
+- **Desde otra app o un script**: `gridterm open [CARPETA] [-- COMANDO…]` abre una terminal en la carpeta (por defecto, la actual) en el gridterm abierto, o lo arranca si no lo está, y ejecuta el comando. Un único argumento tras `--` es una línea de shell tal cual: `gridterm open ~/proyecto -- 'npm install && npm start'`. Para tenerlo en el PATH:
+
+  ```sh
+  ln -s /Applications/gridterm.app/Contents/MacOS/gridterm /usr/local/bin/gridterm
+  ```
+
+  Sirve como «terminal externa» de editores como VS Code o JetBrains si admiten un comando.
+- Con el grid lleno, lo que llega de fuera se abre como pestaña (terminal hija) de la celda activa.
+- Por dentro, macOS entrega todo a la app como URL `file://`. `gridterm open` deja la petición en `~/.config/gridterm/requests/` (carpeta privada) y la abre con `open`; la app solo atiende peticiones de esa carpeta, del propio usuario y recientes, y las borra al leerlas.
+
 ## Atajos
 
 | Atajo | Acción |

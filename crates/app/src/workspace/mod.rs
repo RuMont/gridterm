@@ -977,18 +977,91 @@ impl Workspace {
     /// folder of the terminal the cell shows. It shares the cell (files,
     /// agent context) with its parent.
     fn new_terminal_in_cell(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(cell) = self.cells.get(index).cloned() else { return };
-        let current = cell.read(cx).current_terminal().clone();
-        current.update(cx, |t, cx| t.refresh_process_info(cx));
-        let cwd = current.read(cx).cwd().cloned();
+        self.new_terminal_in_cell_at(index, None, window, cx);
+    }
+
+    /// A child terminal in cell `index`, in `cwd` (default: the folder of
+    /// the cell's current terminal).
+    fn new_terminal_in_cell_at(&mut self, index: usize, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<TerminalView>> {
+        let cell = self.cells.get(index).cloned()?;
+        let cwd = match cwd {
+            Some(dir) => Some(dir),
+            None => {
+                let current = cell.read(cx).current_terminal().clone();
+                current.update(cx, |t, cx| t.refresh_process_info(cx));
+                current.read(cx).cwd().cloned()
+            }
+        };
         let id = self.next_id;
         self.next_id += 1;
         let settings = self.terminal_settings();
         let view = cx.new(|cx| TerminalView::new(id, cwd, settings, window, cx));
-        cell.update(cx, |c, cx| c.add_terminal(view, cx));
+        cell.update(cx, |c, cx| c.add_terminal(view.clone(), cx));
         self.set_active(index, window, cx);
         crate::cell::focus_cell(&cell, window, cx);
         self.update_context(cx);
+        Some(view)
+    }
+
+    /// Folders, scripts and `gridterm open` requests handed over by macOS
+    /// (Finder, `open -a gridterm`, the Dock icon).
+    pub(crate) fn open_urls(&mut self, urls: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::external::{self, Target};
+        for url in urls {
+            let Some(path) = external::file_url_path(&url) else {
+                log::warn!("ignoring {url}: not a file");
+                continue;
+            };
+            let target = if external::is_request(&path) {
+                match external::take_request(&path) {
+                    Some(request) => request.target(),
+                    None => continue,
+                }
+            } else {
+                match external::classify(&path) {
+                    Some(t) => t,
+                    None => {
+                        self.notify_user(format!("Cannot open {}: it does not exist", path.display()), true, window, cx);
+                        continue;
+                    }
+                }
+            };
+            match target {
+                Target::Folder(dir) => {
+                    self.open_external_terminal(dir, None, window, cx);
+                }
+                Target::Run { dir, line } => {
+                    self.open_external_terminal(dir, Some(line), window, cx);
+                }
+                Target::File(file) => {
+                    if self.terminals.is_empty() {
+                        let dir = file.parent().map(std::path::Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/"));
+                        self.open_external_terminal(dir, None, window, cx);
+                    }
+                    if let Some(i) = self.active {
+                        self.open_file_in(i, &file, None, false, window, cx);
+                    }
+                }
+            }
+        }
+        window.activate_window();
+    }
+
+    /// A terminal asked for from outside: a new cell, or a tab of the active
+    /// cell when the grid is full. `line` is typed into its shell, which
+    /// stays open when it ends.
+    fn open_external_terminal(&mut self, dir: PathBuf, line: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<TerminalView>> {
+        let view = if !self.grid_spec().is_full(self.terminals.len()) {
+            self.open_terminal_in(Some(dir), window, cx);
+            self.terminals.last().cloned()
+        } else {
+            let index = self.active.unwrap_or(0);
+            self.new_terminal_in_cell_at(index, Some(dir), window, cx)
+        }?;
+        if let Some(line) = line {
+            view.update(cx, |t, cx| t.run_when_ready(line, cx));
+        }
+        Some(view)
     }
 
     /// Every terminal: parents and the cells' child terminals.

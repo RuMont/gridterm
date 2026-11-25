@@ -488,6 +488,8 @@ pub fn start(window: &mut Window, cx: &mut Context<Workspace>) {
             restore_phase(&mut r).await;
         } else if phase == "empty" {
             empty_phase(&mut r).await;
+        } else if phase == "external" {
+            external_phase(&mut r, &out).await;
         } else if phase == "claude" {
             let fixture = Fixture::create(out.join("fixture"));
             claude_cases(&mut r, &fixture).await;
@@ -568,6 +570,127 @@ async fn empty_phase(r: &mut Runner<'_>) {
         ensure!(ctx == super::ActiveContext::default(), "context still points at the closed cell: {ctx:?}");
         ensure!(root.is_none() && repo.is_none(), "tools still on it: explorer {root:?}, git {repo:?}");
         Ok("sin celda activa, sin foco, sin contexto".into())
+    });
+}
+
+/// What macOS hands the app from outside (Finder, `open -a`, `gridterm open`),
+/// fed straight to the handler as the file URLs it would receive.
+async fn external_phase(r: &mut Runner<'_>, out: &Path) {
+    use crate::external::{self, OpenRequest};
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = out.join("external");
+    std::fs::create_dir_all(&base).unwrap();
+    let base = base.canonicalize().unwrap();
+    let url = |p: &Path| format!("file://{}", p.to_string_lossy().replace('%', "%25").replace(' ', "%20"));
+    let open = |r: &mut Runner<'_>, urls: Vec<String>| r.with(move |ws, w, cx| ws.open_urls(urls, w, cx));
+    // Each case starts from one terminal (the startup one, or a fresh one).
+    while r.n_terms() > 1 {
+        r.key("cmd-1");
+        r.key("cmd-w");
+        r.sleep(300).await;
+    }
+
+    case!(r, "EX1", "Carpeta abierta desde fuera (Finder, Dock, open -a): terminal nueva en ella", {
+        let dir = base.join("My Folder");
+        std::fs::create_dir_all(&dir).unwrap();
+        let before = r.n_terms();
+        open(r, vec![url(&dir) + "/"]);
+        let d = dir.clone();
+        let ok = r.wait_until(4000, move |ws, cx| ws.terminals.len() == before + 1 && ws.terminals.last().and_then(|t| t.read(cx).cwd().cloned()).is_some_and(|c| c == d)).await;
+        let (n, active, cwd) = r.read(|ws, cx| (ws.terminals.len(), ws.active, ws.terminals.last().and_then(|t| t.read(cx).cwd().cloned())));
+        ok.ok_or_else(|| format!("{n} terminals (was {before}), cwd {cwd:?}"))?;
+        ensure!(active == Some(n - 1), "the new cell is not active: {active:?}");
+        Ok(format!("celda {n} en {}", dir.display()))
+    });
+
+    case!(r, "EX2", ".command sin permiso de ejecución: se ejecuta en su carpeta y queda la shell", {
+        let script = base.join("setup tool.command");
+        std::fs::write(&script, "echo EX2_RAN in $(pwd)\ntouch ex2.done\n").unwrap();
+        let before = r.n_terms();
+        open(r, vec![url(&script)]);
+        let marker = base.join("ex2.done");
+        let ran = r.wait_until(6000, move |_, _| marker.exists()).await;
+        r.sleep(600).await;
+        let (n, text) = r.read(|ws, cx| (ws.terminals.len(), ws.terminals.last().map(|t| t.read(cx).visible_text()).unwrap_or_default()));
+        r.shot("EX2-command");
+        ran.ok_or_else(|| format!("the script did not run:\n{text}"))?;
+        ensure!(n == before + 1, "{n} terminals, was {before}");
+        // Long lines wrap in a narrow cell.
+        ensure!(text.replace('\n', "").contains(&format!("EX2_RAN in {}", base.display())), "output not in its folder:\n{text}");
+        // The shell is still there and takes commands.
+        let t = r.read(|ws, _| ws.terminals.last().cloned()).unwrap();
+        r.app(move |_, cx| t.update(cx, |t, _| t.write("echo EX2_SHELL_$((1+1))\r")));
+        let alive = r.wait_text(n - 1, "EX2_SHELL_2", 3000).await;
+        ensure!(alive.is_some(), "the shell did not stay after the script");
+        Ok("ejecutado en su carpeta; la shell sigue".into())
+    });
+
+    case!(r, "EX3", "Ejecutable unix (sin extensión) abierto desde fuera: se ejecuta", {
+        let exe = base.join("hello-tool");
+        std::fs::write(&exe, "#!/bin/sh\necho EX3_$((20+1))\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        open(r, vec![url(&exe)]);
+        let ok = r.wait_until(6000, |ws, cx| ws.terminals.last().is_some_and(|t| t.read(cx).visible_text().contains("EX3_21"))).await;
+        let text = r.read(|ws, cx| ws.terminals.last().map(|t| t.read(cx).visible_text()).unwrap_or_default());
+        ok.ok_or_else(|| format!("no output:\n{text}"))?;
+        Ok("EX3_21".into())
+    });
+
+    case!(r, "EX4", "`gridterm open DIR -- CMD`: la petición abre la terminal, ejecuta y se borra; una falsa se ignora", {
+        let dir = base.join("My Folder");
+        let request = OpenRequest { cwd: Some(dir.clone()), command: "echo EX4_$((40+2)) $(pwd)".into() };
+        let file = external::write_request(&request).map_err(|e| e.to_string())?;
+        let before = r.n_terms();
+        open(r, vec![url(&file)]);
+        let want = format!("EX4_42 {}", dir.display());
+        let w2 = want.clone();
+        let ok = r.wait_until(6000, move |ws, cx| ws.terminals.last().is_some_and(|t| t.read(cx).visible_text().replace('\n', "").contains(&w2))).await;
+        let text = r.read(|ws, cx| ws.terminals.last().map(|t| t.read(cx).visible_text()).unwrap_or_default());
+        ok.ok_or_else(|| format!("expected {want:?}:\n{text}"))?;
+        ensure!(r.n_terms() == before + 1, "no new terminal");
+        ensure!(!file.exists(), "request file left behind");
+        // A request file somewhere else (e.g. downloaded) is not acted upon.
+        let forged = base.join(format!("evil.{}", external::REQUEST_EXT));
+        std::fs::write(&forged, r#"{"cwd":"/tmp","command":"touch /tmp/gridterm-ex4-forged"}"#).unwrap();
+        let n = r.n_terms();
+        open(r, vec![url(&forged)]);
+        r.sleep(800).await;
+        ensure!(r.n_terms() == n, "a forged request opened a terminal");
+        ensure!(!Path::new("/tmp/gridterm-ex4-forged").exists(), "a forged request ran");
+        Ok("ejecutado y borrada; la falsa, ignorada".into())
+    });
+
+    case!(r, "EX5", "Grid lleno: lo abierto desde fuera va como pestaña de la celda activa", {
+        let saved = r.read(|ws, _| ws.config.clone());
+        let n = r.n_terms();
+        // Shrink the grid to exactly the open cells: full.
+        r.with(move |ws, w, cx| {
+            let mut c = ws.config.clone();
+            c.grid.max_cols = n;
+            c.grid.max_rows = 1;
+            ws.apply_config(c, w, cx);
+        });
+        r.key("cmd-1");
+        let script = base.join("full.sh");
+        std::fs::write(&script, "echo EX5_RAN\n").unwrap();
+        open(r, vec![url(&script)]);
+        let ok = r.wait_until(6000, |ws, cx| ws.cells[0].read(cx).children().iter().any(|t| t.read(cx).visible_text().contains("EX5_RAN"))).await;
+        let (terms, children) = r.read(|ws, cx| (ws.terminals.len(), ws.cells[0].read(cx).children().len()));
+        r.shot("EX5-tab");
+        r.with(move |ws, w, cx| ws.apply_config(saved, w, cx));
+        ok.ok_or_else(|| format!("not run as a tab: {terms} cells, {children} children in cell 1"))?;
+        ensure!(terms == n, "a cell was added to a full grid: {terms}");
+        Ok(format!("pestaña hija en la celda 1 ({children})"))
+    });
+
+    case!(r, "EX6", "Lo que no existe avisa; las URL que no son de archivo se ignoran", {
+        let before = (r.n_terms(), r.notices().len());
+        open(r, vec![url(&base.join("gone.command")), "https://example.com".into()]);
+        r.sleep(300).await;
+        let after = (r.n_terms(), r.notices().len());
+        ensure!(after.0 == before.0, "opened a terminal");
+        ensure!(after.1 == before.1 + 1, "notices {before:?} → {after:?}");
+        Ok("un aviso, nada abierto".into())
     });
 }
 

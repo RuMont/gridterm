@@ -563,6 +563,30 @@ impl TerminalView {
         }
     }
 
+    /// Types `line` and Enter once the shell has drawn its prompt (its first
+    /// output has settled), or after 5 s at most. Typed ahead, the terminal
+    /// would echo it before the prompt and the shell print it again.
+    pub fn run_when_ready(&mut self, line: String, cx: &mut Context<Self>) {
+        const SETTLE: Duration = Duration::from_millis(200);
+        const GIVE_UP: Duration = Duration::from_secs(5);
+        let started = Instant::now();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(50)).await;
+                let ready = this.update(cx, |t, _| {
+                    t.last_output_at.is_some_and(|at| at.elapsed() >= SETTLE) || started.elapsed() >= GIVE_UP
+                });
+                match ready {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    Err(_) => return,
+                }
+            }
+            let _ = this.update(cx, |t, _| t.write(format!("{line}\r")));
+        })
+        .detach();
+    }
+
     /// Types text as if pasted (bracketed paste aware).
     pub fn paste_text(&mut self, text: &str) {
         let mode = *self.term.lock().mode();
