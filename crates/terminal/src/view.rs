@@ -26,6 +26,27 @@ gpui_kit::actions!(terminal, [Copy, Paste, Clear, ScrollPageUp, ScrollPageDown, 
 
 /// Key context used for terminal-specific key bindings.
 pub const KEY_CONTEXT: &str = "Terminal";
+/// What runs in a terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Activity {
+    /// The shell waits at its prompt.
+    #[default]
+    Idle,
+    /// A command runs but is quiet (a server, an idle agent, `sleep`).
+    Running,
+    /// A command runs and prints (or just started): a build, tests, an
+    /// agent at work.
+    Working,
+}
+
+/// A running command counts as working while it printed (or started) this
+/// recently.
+pub const BUSY_WINDOW: Duration = Duration::from_secs(3);
+/// The shell may be in front this long between the commands of a loop or a
+/// script before the terminal counts as idle.
+const SHELL_GAP: Duration = Duration::from_millis(1500);
+/// Output this soon after a key press is its echo, not work.
+const ECHO_WINDOW: Duration = Duration::from_millis(500);
 
 const PADDING: f32 = 6.0;
 /// Minimum delay between two UI refreshes caused by PTY output (~240 Hz cap).
@@ -130,6 +151,14 @@ pub struct TerminalView {
     blink_visible: bool,
     blink_toggles: u64,
     last_input: Instant,
+    /// Activity detection (see `refresh_activity`): output not caused by
+    /// typing, the foreground job (and whether it is a program), when a
+    /// program was last seen in front and since when one runs.
+    last_output_at: Option<Instant>,
+    foreground: Option<(i32, bool)>,
+    program_seen_at: Option<Instant>,
+    running_since: Option<Instant>,
+    activity: Activity,
     blink_task: Option<Task<()>>,
     hovered_link: Option<HoveredLink>,
     last_mouse: Option<Point<Pixels>>,
@@ -250,6 +279,11 @@ impl TerminalView {
             blink_visible: true,
             blink_toggles: 0,
             last_input: Instant::now(),
+            last_output_at: None,
+            foreground: None,
+            program_seen_at: None,
+            running_since: None,
+            activity: Activity::Idle,
             blink_task: None,
             hovered_link: None,
             last_mouse: None,
@@ -438,6 +472,47 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// What runs in this terminal (see `refresh_activity`).
+    pub fn activity(&self) -> Activity {
+        self.activity
+    }
+
+    /// Re-evaluates the terminal's [`Activity`]. A command runs while a
+    /// program other than the shell is in the foreground; the shell itself
+    /// comes to the front between the commands of a loop or a script, so
+    /// it only counts as idle after [`SHELL_GAP`]. A running command is
+    /// working when it started or printed within [`BUSY_WINDOW`] (a build,
+    /// tests, an agent's spinner; not the echo of typing). Cheap (one
+    /// syscall, a second when the job changes); notifies only on change.
+    pub fn refresh_activity(&mut self, cx: &mut Context<Self>) -> bool {
+        let pid = if self.exited { None } else { self.pty.as_ref().and_then(|p| p.foreground_pid()) };
+        if pid != self.foreground.map(|(p, _)| p) {
+            let program = pid.is_some_and(|p| crate::cwd::process_name(p).is_some_and(|n| !keys::is_shell(&n)));
+            self.foreground = pid.map(|p| (p, program));
+        }
+        let now = Instant::now();
+        if self.foreground.is_some_and(|(_, program)| program) {
+            self.program_seen_at = Some(now);
+            self.running_since.get_or_insert(now);
+        }
+        let running = self.program_seen_at.is_some_and(|t| now.duration_since(t) < SHELL_GAP);
+        if !running {
+            self.running_since = None;
+        }
+        let recent = |t: Option<Instant>| t.is_some_and(|t| now.duration_since(t) < BUSY_WINDOW);
+        let activity = match running {
+            false => Activity::Idle,
+            true if recent(self.running_since) || recent(self.last_output_at) => Activity::Working,
+            true => Activity::Running,
+        };
+        let changed = activity != self.activity;
+        if changed {
+            self.activity = activity;
+            cx.notify();
+        }
+        changed
+    }
+
     /// Keyboard input: show the cursor solid and restart the blink pause.
     fn note_input(&mut self) {
         self.last_input = Instant::now();
@@ -560,6 +635,10 @@ impl TerminalView {
         }
         if dirty {
             self.output_batches += 1;
+            // The echo of what the user types is no sign of work.
+            if self.last_input.elapsed() >= ECHO_WINDOW {
+                self.last_output_at = Some(Instant::now());
+            }
             // Inactive terminals are not polled; keep their header (process
             // name, cwd) current when they produce output, at most once a second.
             if !self.active && self.last_info_refresh.elapsed() >= Duration::from_secs(1) {

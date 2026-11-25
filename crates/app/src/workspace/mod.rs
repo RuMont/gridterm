@@ -217,7 +217,10 @@ impl Workspace {
 
         let poll = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(CWD_POLL).await;
-            if this.update(cx, |ws, cx| ws.poll_active_terminal(cx)).is_err() {
+            if this.update(cx, |ws, cx| {
+                ws.poll_active_terminal(cx);
+                ws.poll_busy(cx);
+            }).is_err() {
                 break;
             }
         });
@@ -1060,6 +1063,13 @@ impl Workspace {
         }
         self.update_context(cx);
         cx.notify();
+    }
+
+    /// What runs in every terminal (cell frames and tab dots).
+    fn poll_busy(&mut self, cx: &mut Context<Self>) {
+        for t in self.all_terminals(cx) {
+            t.update(cx, |t, cx| t.refresh_activity(cx));
+        }
     }
 
     /// Only the active terminal is polled (it drives the tools' context);

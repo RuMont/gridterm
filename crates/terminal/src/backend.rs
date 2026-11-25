@@ -170,6 +170,11 @@ impl Pty {
         cwd::foreground_pid(&self.master).and_then(cwd::process_name)
     }
 
+    /// Process group in the foreground of the terminal (one syscall).
+    pub fn foreground_pid(&self) -> Option<i32> {
+        cwd::foreground_pid(&self.master)
+    }
+
     /// Programs running under the shell, which would die with it: the
     /// foreground job (when it is not the shell itself) and background jobs
     /// (children of the shell in a process group of their own). Helpers the

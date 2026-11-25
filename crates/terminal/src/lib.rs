@@ -8,4 +8,4 @@ pub mod links;
 pub mod view;
 
 pub use backend::display_path;
-pub use view::{HoveredLink, TerminalSettings, TerminalView, TerminalViewEvent};
+pub use view::{Activity, HoveredLink, TerminalSettings, TerminalView, TerminalViewEvent};

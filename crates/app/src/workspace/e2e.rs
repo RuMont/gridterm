@@ -1404,6 +1404,58 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok(format!("offset {after_open:?} → {after_scroll:?}"))
     });
 
+    case!(r, "BZ1", "Celda en marcha: un comando (también callado o un bucle de la shell) la enmarca; imprimiendo, «trabajando»; en la shell, nada", {
+        use terminal::Activity;
+        r.key("cmd-1");
+        let shell = |r: &mut Runner<'_>, cmd: &'static str| r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)));
+        let act = |r: &mut Runner<'_>| r.read(|ws, cx| (ws.terminals[0].read(cx).activity(), ws.cells[0].read(cx).activity(cx)));
+        shell(r, "clear; for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 0.4; done\r");
+        let started = r.wait_until(2000, |ws, cx| ws.terminals[0].read(cx).activity() != Activity::Idle).await;
+        // Sampled through the loop: the shell comes to the front between
+        // its commands, the cell must not flicker back to idle.
+        let mut samples = Vec::new();
+        for _ in 0..10 {
+            samples.push(act(r));
+            r.sleep(250).await;
+        }
+        r.next_frame().await;
+        r.next_frame().await;
+        let (paints, renders, screen) = r.read(|ws, cx| {
+            let c = ws.cells[0].read(cx);
+            (c.frame_paints.get(), c.render_count, ws.terminals[0].read(cx).visible_text())
+        });
+        r.shot("BZ1-running");
+        let ended = r.wait_until(10_000, |ws, cx| ws.terminals[0].read(cx).activity() == Activity::Idle).await;
+        let result: Result<String, String> = async {
+            started.ok_or("the loop never marked the terminal")?;
+            ensure!(paints > 0, "the orange frame was never painted (cell renders {renders}); screen:\n{screen}");
+            ensure!(samples.iter().all(|(t, c)| *t != Activity::Idle && *c != Activity::Idle), "flickered to idle during the loop: {samples:?}");
+            ensure!(samples.iter().any(|(t, _)| *t == Activity::Working), "printing never counted as working: {samples:?}");
+            let ended = ended.ok_or("still marked after the loop ended")?;
+            // A typed command that prints nothing: running, working only at first.
+            r.run("sleep 4");
+            r.wait_until(1500, |ws, cx| ws.terminals[0].read(cx).activity() != Activity::Idle).await.ok_or("a typed `sleep 4` was not marked")?;
+            r.sleep(3300).await;
+            let quiet = act(r).0;
+            ensure!(quiet == Activity::Running, "`sleep` after 3 s: {quiet:?}, expected Running");
+            r.wait_until(4000, |ws, cx| ws.terminals[0].read(cx).activity() == Activity::Idle).await.ok_or("still marked after `sleep` ended")?;
+            // A program waiting for input, also while the user types to it.
+            shell(r, "cat\r");
+            r.sleep(3600).await;
+            let waiting = act(r).0;
+            r.type_text("hello");
+            r.sleep(700).await;
+            let typing = act(r).0;
+            ensure!(waiting == Activity::Running && typing == Activity::Running, "cat waiting {waiting:?}, while typing {typing:?}; expected Running");
+            Ok(format!("bucle sin parpadeo ({} muestras); libre {ended:?} después; sleep y cat «en marcha»", samples.len()))
+        }
+        .await;
+        shell(r, "\x03");
+        r.sleep(200).await;
+        shell(r, "clear\r");
+        result
+    });
+
     case!(r, "CC1", "Con un programa que solo recibe clics (como Claude Code), arrastrar selecciona texto", {
         r.key("cmd-1");
         // Written to the shell directly: typing needs a painted window.

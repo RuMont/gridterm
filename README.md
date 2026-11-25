@@ -26,6 +26,7 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | ⌘W | Cerrar la pestaña de archivo visible; si se ve la terminal, cerrarla (con sus archivos) |
 | ⌘⇧] / ⌘⇧[ | Pestaña siguiente / anterior de la celda activa |
 | Esc (en un archivo) | Volver a la pestaña de la terminal |
+| (indicador) | Una celda con un comando en marcha (`npm run start`, tests, `sleep`, un agente abierto) se enmarca en naranja y su pestaña lleva un punto naranja; el punto pulsa mientras el comando imprime (compila, ejecuta tests, el agente trabaja). Se apaga al volver al prompt |
 | Clic derecho en las pestañas de una celda | Menú: «Nueva terminal en celda» abre una terminal hija en la carpeta de la que se ve. Comparte la celda: sus archivos y lo que ve un agente que corra en ella. ⌘W o su ✕ la cierran; el ✕ de la derecha sigue cerrando la celda entera |
 | Rueda, ⇧ + rueda o trackpad sobre las pestañas | Desplazarlas en horizontal cuando no caben (la pestaña que se abre se hace visible sola) |
 | ⌘ + clic o F12 sobre un símbolo (en un archivo) | Ir a su declaración: sigue el `import`/`use` hasta el archivo (TS/JS y Rust, con alias de `tsconfig`, `node_modules` y re-exportaciones); si no, la busca en el mismo archivo y luego en el proyecto. Con ⌘ pulsado el símbolo se subraya |

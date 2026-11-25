@@ -15,7 +15,7 @@ use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use terminal::colors::palette;
-use terminal::{TerminalView, TerminalViewEvent};
+use terminal::{Activity, TerminalView, TerminalViewEvent};
 
 use crate::viewer::{FileViewer, ViewerEvent};
 
@@ -54,6 +54,7 @@ struct TerminalSnapshot {
     cwd: Option<PathBuf>,
     active: bool,
     zoomed: bool,
+    activity: Activity,
 }
 
 pub struct CellView {
@@ -81,6 +82,8 @@ pub struct CellView {
     last_viewed: Option<Entity<FileViewer>>,
     view_task: Option<Task<()>>,
     pub(crate) tab_scroll: ScrollHandle,
+    /// Times the running-command frame was painted (e2e).
+    pub(crate) frame_paints: std::rc::Rc<std::cell::Cell<u64>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -128,6 +131,7 @@ impl CellView {
             last_viewed: None,
             view_task: None,
             tab_scroll: ScrollHandle::new(),
+            frame_paints: Default::default(),
             _subscriptions: vec![observe],
         }
     }
@@ -388,6 +392,17 @@ impl CellView {
         }
     }
 
+    /// The busiest of the cell's terminals: a command at work, a command
+    /// running quietly, or every shell at its prompt.
+    pub fn activity(&self, cx: &App) -> Activity {
+        let rank = |a: Activity| match a {
+            Activity::Idle => 0,
+            Activity::Running => 1,
+            Activity::Working => 2,
+        };
+        std::iter::once(self.snapshot.activity).chain(self.children.iter().map(|c| c.read(cx).activity())).max_by_key(|a| rank(*a)).unwrap_or_default()
+    }
+
     /// Whether a terminal or one of the viewers holds focus.
     pub fn contains_focused(&self, window: &Window, cx: &App) -> bool {
         self.terminals().any(|t| t.focus_handle(cx).contains_focused(window, cx))
@@ -436,6 +451,7 @@ impl CellView {
                 window.focus(&this.terminal.focus_handle(cx), cx);
             }))
             .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(format!("{id}")))
+            .when(s.activity != Activity::Idle, |el| el.child(busy_dot(id, s.activity)))
             // Next to the number so it survives the tab shrinking.
             .when(self.activity && !terminal_visible, |el| {
                 let b = self.activity_bounds.clone();
@@ -480,6 +496,7 @@ impl CellView {
                     this.focus(window, cx);
                 }))
                 .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(format!("{}", t.id())))
+                .when(t.activity() != Activity::Idle, |el| el.child(busy_dot(t.id(), t.activity())))
                 .child(div().flex_none().child(t.label()))
                 .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().opacity(0.75).child(cwd))
                 .child(tab_button(("tab-child-close", i), "✕", cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -600,7 +617,23 @@ pub fn focus_cell(cell: &Entity<CellView>, window: &mut Window, cx: &mut App) {
 }
 
 fn snapshot_of(t: &TerminalView) -> TerminalSnapshot {
-    TerminalSnapshot { label: t.label(), cwd: t.cwd().cloned(), active: t.is_active(), zoomed: t.is_zoomed() }
+    TerminalSnapshot { label: t.label(), cwd: t.cwd().cloned(), active: t.is_active(), zoomed: t.is_zoomed(), activity: t.activity() }
+}
+
+/// A dot next to the number of a terminal running a command: it pulses
+/// while the command works (prints).
+fn busy_dot(id: u64, activity: Activity) -> AnyElement {
+    let dot = div().id(("busy", id as usize)).flex_none().size(px(7.)).bg(rgb(crate::theme::peach()));
+    if activity == Activity::Working {
+        dot.with_animation(
+            ("busy-pulse", id as usize),
+            Animation::new(std::time::Duration::from_millis(1400)).repeat().with_easing(pulsating_between(0.3, 1.0)),
+            |el, delta| el.opacity(delta),
+        )
+        .into_any_element()
+    } else {
+        dot.into_any_element()
+    }
 }
 
 fn tab_button(id: impl Into<ElementId>, label: &'static str, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> impl IntoElement {
@@ -620,6 +653,10 @@ impl Render for CellView {
         self.render_count += 1;
         let p = palette();
         let border = if self.snapshot.active { rgb(p.accent) } else { rgb(p.border) };
+        // A running command frames the cell in orange, drawn over it so the
+        // terminal keeps its size (fainter when the cell is not active).
+        let running = self.activity(cx) != Activity::Idle;
+        let frame = rgba(crate::theme::peach() << 8 | if self.snapshot.active { 0xff } else { 0xa0 });
         let body = match self.visible_viewer() {
             Some(viewer) => viewer.clone().into_any_element(),
             None => AnyView::from(self.current_terminal().clone()).cached(StyleRefinement::default().size_full()).into_any_element(),
@@ -645,6 +682,17 @@ impl Render for CellView {
                     .child(canvas(move |bounds, _, _| bb.set(bounds), |_, _, _, _| {}).absolute().inset_0())
                     .child(body),
             )
+            .when(running, |el| {
+                let paints = self.frame_paints.clone();
+                el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .border_2()
+                        .border_color(frame)
+                        .child(canvas(|_, _, _| {}, move |_, _, _, _| paints.set(paints.get() + 1)).absolute().inset_0()),
+                )
+            })
     }
 }
 
