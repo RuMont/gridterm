@@ -36,6 +36,7 @@ gpui_kit::actions!(
         ShowTerminalTab,
         CancelShrink,
         SendToAgent,
+        CloseHistory,
     ]
 );
 
@@ -45,6 +46,8 @@ pub const SIDEBAR_CONTEXT: &str = "Sidebar";
 pub const SHRINK_CONTEXT: &str = "ShrinkDialog";
 /// Key context of the ⌘P palette overlay.
 pub const PALETTE_CONTEXT: &str = "Palette";
+/// Key context of the floating git history window.
+pub const HISTORY_CONTEXT: &str = "HistoryWindow";
 
 pub fn bind_keys(cx: &mut App) {
     let t = Some(term::KEY_CONTEXT);
@@ -75,6 +78,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-,", ShowSettings, None),
         KeyBinding::new("escape", FocusActiveTerminal, s),
         KeyBinding::new("escape", ClosePalette, Some(PALETTE_CONTEXT)),
+        KeyBinding::new("escape", CloseHistory, Some(HISTORY_CONTEXT)),
         KeyBinding::new("escape", CancelShrink, Some(SHRINK_CONTEXT)),
         KeyBinding::new("cmd-}", NextTab, None),
         KeyBinding::new("cmd-{", PrevTab, None),

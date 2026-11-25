@@ -18,6 +18,8 @@ pub enum PanelEvent {
     /// line). A preview replaces the cell's preview tab and keeps focus.
     OpenFile { path: PathBuf, line: Option<u32>, preview: bool },
     Notify { message: String, error: bool },
+    /// Show the git history in the floating window.
+    OpenHistory,
     ConfigChanged(config::Config),
 }
 

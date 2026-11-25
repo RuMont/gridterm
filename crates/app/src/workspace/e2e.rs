@@ -1510,7 +1510,15 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
     case!(r, "Gi4", "Deshacer solo si no está pusheado; cambios a staged y mensaje recuperado", {
         let ok = r.wait_until(3000, |ws, cx| ws.git.read(cx).can_undo).await;
         ensure!(ok.is_some(), "undo not enabled for unpushed commit");
-        r.with(|ws, w, cx| ws.git.update(cx, |g, cx| g.undo(w, cx)));
+        // Through the ▾ next to Commit: its first item is "Undo last commit".
+        let chevron = r.read(|ws, cx| ws.git.read(cx).actions_bounds.get());
+        ensure!(chevron.size.width > px(0.), "no ▾ button next to Commit");
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: chevron.center(), pressed_button: None, modifiers: Modifiers::default() }));
+        r.click_at(chevron.center(), 1, Modifiers::default());
+        r.sleep(200).await;
+        r.shot("Gi4-actions-menu");
+        r.key("down");
+        r.key("enter");
         r.wait_until(5000, |ws, cx| ws.git.read(cx).status.as_ref().is_some_and(|s| s.staged.iter().any(|c| c.path == Path::new("README.md")))).await.ok_or("changes not staged after undo")?;
         let msg = r.read(|ws, cx| ws.git.read(cx).message.read(cx).value().to_string());
         ensure!(msg == "e2e commit one", "message box = {msg:?}");
@@ -1521,6 +1529,104 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         r.wait_until(8000, |ws, cx| ws.git.read(cx).log.iter().find(|c| c.on_head).is_some_and(|c| c.pushed)).await.ok_or("push failed")?;
         r.wait_until(3000, |ws, cx| !ws.git.read(cx).can_undo).await.ok_or("undo still enabled after push")?;
         Ok("ok".into())
+    });
+
+    case!(r, "GT1", "Rama con nombre largo: se recorta y nada se sale del panel", {
+        let original = r.read(|ws, cx| ws.git.read(cx).branch_label()).ok_or("no branch")?;
+        let long = "feature/IWA-12345-a-really-long-branch-name-that-never-fits-in-the-sidebar";
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().map(|o| o.status.success()).unwrap_or(false);
+        ensure!(git(&["checkout", "-q", "-b", long]), "cannot create the branch");
+        let shown = r.wait_until(5000, move |ws, cx| ws.git.read(cx).branch_label().as_deref() == Some(long)).await;
+        r.next_frame().await;
+        r.next_frame().await;
+        let (panel, sync, chevron) = r.read(|ws, cx| {
+            let g = ws.git.read(cx);
+            (g.panel_bounds.get(), g.sync_bounds.get(), g.actions_bounds.get())
+        });
+        r.shot("GT1-long-branch");
+        git(&["checkout", "-q", &original]);
+        git(&["branch", "-q", "-D", long]);
+        let o = original.clone();
+        r.wait_until(5000, move |ws, cx| ws.git.read(cx).branch_label().as_deref() == Some(o.as_str())).await;
+        shown.ok_or("long branch not shown")?;
+        let right = panel.origin.x + panel.size.width;
+        ensure!(sync.size.width > px(0.) && sync.origin.x + sync.size.width <= right + px(0.5), "counters end at {:?}, panel at {right:?}", sync.origin.x + sync.size.width);
+        ensure!(chevron.origin.x + chevron.size.width <= right + px(0.5), "▾ ends at {:?}, panel at {right:?}", chevron.origin.x + chevron.size.width);
+        Ok(format!("contadores dentro ({:?} ≤ {right:?})", sync.origin.x + sync.size.width))
+    });
+
+    case!(r, "GH1", "Historial en ventana flotante: ruta, celda y posición en el grid; Esc la cierra", {
+        let active = r.active().ok_or("no active cell")?;
+        r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.open_history(cx)));
+        r.wait_until(2000, |ws, _| ws.history_open).await.ok_or("history window did not open")?;
+        r.next_frame().await;
+        r.next_frame().await;
+        let (expanded, rows, super::HistoryLocation { repo: repo_shown, branch, cell }) = r.read(|ws, cx| {
+            let g = ws.git.read(cx);
+            (g.history_window, g.rendered_history_rows, ws.history_location(cx))
+        });
+        r.shot("GH1-history-window");
+        // A click in the window, right above another cell, stays in the window.
+        let other = r.read(move |ws, cx| ws.cells.iter().enumerate().find(|(i, _)| *i != active).map(|(_, c)| c.read(cx).body_bounds.get()));
+        if let Some(b) = other {
+            r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: b.center(), pressed_button: None, modifiers: Modifiers::default() }));
+            r.click_at(b.center(), 1, Modifiers::default());
+            r.sleep(150).await;
+        }
+        let (still_open, active_after) = r.read(|ws, _| (ws.history_open, ws.active));
+        let leaked_focus = r.focused_terminal();
+        r.key("escape");
+        let closed = r.wait_until(1000, |ws, cx| !ws.history_open && !ws.git.read(cx).history_window).await;
+        ensure!(expanded, "the git panel is not in history mode");
+        ensure!(rows > 0, "no commit rows painted in the window");
+        ensure!(repo_shown.as_deref() == Some(repo.as_path()), "path shown {repo_shown:?}");
+        ensure!(branch.is_some(), "no branch shown");
+        let super::CellPosition { index, row, col, terminal: id } = cell.ok_or("no cell shown")?;
+        ensure!(index == active, "cell {index} shown, active is {active}");
+        ensure!(other.is_some(), "no other cell to click above");
+        ensure!(still_open, "a click inside the window closed it");
+        ensure!(active_after == Some(active) && leaked_focus.is_none(), "the click went through: active {active_after:?}, focused terminal {leaked_focus:?}");
+        closed.ok_or("Esc did not close the window")?;
+        ensure!(r.focused_terminal() == Some(active), "focus after Esc: {:?}", r.focused_terminal());
+        Ok(format!("{rows} commits; celda {} (fila {}, columna {}, T{id})", index + 1, row + 1, col + 1))
+    });
+
+    case!(r, "GH2", "Clic en un commit del historial del panel: ventana con ese commit desplegado (detalles + diff); otro clic lo pliega", {
+        use crate::panels::git::{BandRow, HRow};
+        r.next_frame().await;
+        // The second commit of the panel's history (the fixture's files).
+        let i = 1;
+        let (sha, pos) = r.read(move |ws, cx| {
+            let g = ws.git.read(cx);
+            (g.log.get(i).map(|c| c.sha.clone()), g.graph_bounds.borrow().get(&i).map(|b| b.center()))
+        });
+        let (sha, pos) = (sha.ok_or("no second commit")?, pos.ok_or("commit row not painted in the panel")?);
+        r.click_at(pos, 1, Modifiers::default());
+        let s2 = sha.clone();
+        let loaded = r.wait_until(3000, move |ws, cx| {
+            let g = ws.git.read(cx);
+            ws.history_open && g.open_commit.as_deref() == Some(s2.as_str()) && matches!(g.commit_details, Some(Ok(_)))
+        }).await;
+        r.next_frame().await;
+        r.next_frame().await;
+        let rows = r.read(|ws, cx| ws.git.read(cx).history_rows.clone());
+        r.shot("GH2-commit-unfolded");
+        loaded.ok_or("window not opened on the commit, or its details not loaded")?;
+        let band_sha = rows.iter().any(|row| matches!(row, HRow::Band(BandRow::Sha { sha: s, .. }) if *s == sha));
+        let files = rows.iter().filter(|row| matches!(row, HRow::File(_))).count();
+        let lines = rows.iter().filter(|row| matches!(row, HRow::Line(..))).count();
+        ensure!(band_sha, "no details band with the full sha");
+        ensure!(rows.iter().any(|row| matches!(row, HRow::Band(BandRow::Author { .. }))), "no author in the band");
+        ensure!(files > 0 && lines > 0, "diff not shown: {files} files, {lines} lines");
+        // In the window a click on the commit folds it.
+        let wide = r.read(move |ws, cx| ws.git.read(cx).graph_bounds.borrow().get(&i).map(|b| b.center())).ok_or("commit row not painted in the window")?;
+        r.click_at(wide, 1, Modifiers::default());
+        let folded = r.wait_until(1000, |ws, cx| ws.git.read(cx).open_commit.is_none()).await;
+        let still_open = r.read(|ws, _| ws.history_open);
+        r.key("escape");
+        folded.ok_or("a click on the open commit did not fold it")?;
+        ensure!(still_open, "folding closed the window");
+        Ok(format!("{files} archivos, {lines} líneas de diff"))
     });
 
     case!(r, "Gi5", "Revertir un commit pusheado (confirmación + push)", {

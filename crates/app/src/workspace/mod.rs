@@ -135,6 +135,9 @@ pub struct Workspace {
     new_terminal_breakdown: Vec<(&'static str, std::time::Duration)>,
     /// ⌘P palette overlay visible.
     pub(crate) palette_open: bool,
+    /// Floating git history window visible.
+    pub(crate) history_open: bool,
+    history_focus: FocusHandle,
     pub(crate) palette_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// Sidebar drag-resize in progress: (pointer x at start, width at start).
     resizing_sidebar: Option<(f32, Pixels)>,
@@ -242,6 +245,8 @@ impl Workspace {
             last_new_terminal: None,
             new_terminal_breakdown: Vec::new(),
             palette_open: false,
+            history_open: false,
+            history_focus: cx.focus_handle(),
             palette_bounds: Default::default(),
             resizing_sidebar: None,
             weights: GridWeights::equal(&Vec::new()),
@@ -1206,12 +1211,153 @@ impl Workspace {
         }
     }
 
+    fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.history_open = true;
+        self.git.update(cx, |g, cx| g.set_expanded(true, cx));
+        window.focus(&self.history_focus, cx);
+        cx.notify();
+    }
+
+    fn close_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.history_open {
+            self.history_open = false;
+            self.git.update(cx, |g, cx| g.set_expanded(false, cx));
+            self.focus_active_terminal(&FocusActiveTerminal, window, cx);
+            cx.notify();
+        }
+    }
+
+    /// What the history window says about where it is.
+    pub(crate) fn history_location(&self, cx: &App) -> HistoryLocation {
+        let cell = self.context.terminal_id.and_then(|terminal| {
+            let index = self.cells.iter().position(|c| c.read(cx).terminals().any(|t| t.read(cx).id() == terminal))?;
+            let layout = compute_layout(self.terminals.len(), self.grid_spec());
+            let (row, col) = layout::position_of(&layout, index)?;
+            Some(CellPosition { index, row, col, terminal })
+        });
+        HistoryLocation { repo: self.context.repo_root.clone(), branch: self.git.read(cx).branch_label(), cell }
+    }
+
+    fn render_history_window(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let HistoryLocation { repo, branch, cell } = self.history_location(cx);
+        let path = repo.as_deref().map(|p| p.display().to_string()).unwrap_or_else(|| "No repository".into());
+        let layout = compute_layout(self.terminals.len(), self.grid_spec());
+        let position = match cell {
+            Some(c) => format!("Cell {} · row {}, column {} · T{}", c.index + 1, c.row + 1, c.col + 1, c.terminal),
+            None => "No cell".into(),
+        };
+        // A small map of the grid with this cell lit.
+        let minimap = div().flex().flex_col().gap(px(2.)).flex_none().children(layout.iter().map(|r| {
+            div().flex().flex_row().gap(px(2.)).children(r.iter().map(|&i| {
+                let lit = cell.is_some_and(|c| c.index == i);
+                div().w(px(16.)).h(px(10.)).border_1().border_color(rgb(if lit { theme::accent() } else { theme::surface1() })).when(lit, |d| d.bg(rgb(theme::accent())))
+            }))
+        }));
+        div()
+            .id("history-backdrop")
+            .absolute()
+            .inset_0()
+            // Clicks, hover and scroll stop here: nothing under the overlay
+            // reacts while it is open.
+            .occlude()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .bg(rgba(theme::backdrop()))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, w, cx| this.close_history(w, cx)))
+            .child(
+                div()
+                    .id("history-window")
+                    .key_context(HISTORY_CONTEXT)
+                    .track_focus(&self.history_focus)
+                    .on_action(cx.listener(|this, _: &CloseHistory, w, cx| this.close_history(w, cx)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .w(relative(0.86))
+                    .h(relative(0.86))
+                    .flex()
+                    .flex_col()
+                    .border_1()
+                    .border_color(rgb(theme::surface1()))
+                    .bg(rgb(theme::mantle()))
+                    .shadow_lg()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .border_b_1()
+                            .border_color(rgb(theme::surface0()))
+                            .child(minimap)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_2()
+                                            .text_sm()
+                                            .child(Icon::new(IconName::GitBranch).size(px(14.)).text_color(rgb(theme::accent())))
+                                            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(rgb(theme::text())).child("History"))
+                                            .when_some(branch, |el, b| {
+                                                el.child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .px_1()
+                                                        .min_w_0()
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .text_ellipsis()
+                                                        .text_xs()
+                                                        .bg(rgb(theme::surface0()))
+                                                        .text_color(rgb(theme::green()))
+                                                        .child(Icon::new(IconName::GitBranch).size(px(11.)).flex_none())
+                                                        .child(b),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("history-path")
+                                            .text_xs()
+                                            .text_color(rgb(theme::text()))
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(path),
+                                    )
+                                    .child(div().text_xs().text_color(rgb(theme::subtext())).child(position)),
+                            )
+                            .child(
+                                crate::ui::icon_button("history-close", IconName::Close, cx.listener(|this, _: &ClickEvent, w, cx| this.close_history(w, cx)))
+                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Close  Esc").build(w, cx)),
+                            ),
+                    )
+                    .child(div().flex().flex_col().flex_1().min_h_0().child(self.git.clone())),
+            )
+    }
+
     fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let location = self.context.root.as_deref().map(terminal::display_path).unwrap_or_default();
         div()
             .id("palette-backdrop")
             .absolute()
             .inset_0()
+            // Clicks, hover and scroll stop here: nothing under the overlay
+            // reacts while it is open.
+            .occlude()
             .flex()
             .flex_col()
             .items_center()
@@ -1296,6 +1442,10 @@ impl Workspace {
             }
             PanelEvent::Notify { message, error } => {
                 self.notify_user(message.clone(), *error, window, cx);
+                return;
+            }
+            PanelEvent::OpenHistory => {
+                self.open_history(window, cx);
                 return;
             }
             PanelEvent::ConfigChanged(config) => {
@@ -1464,17 +1614,25 @@ impl Workspace {
             )
             .when_some(terminal_label, |el, l| el.child(div().text_color(rgb(theme::overlay0())).child(l)))
             .when_some(branch, |el, b| {
+                // A long branch is cut with "…" (full name in the tooltip) and
+                // leaves room for the location and the pin button.
+                let full: SharedString = b.clone().into();
                 el.child(
                     div()
+                        .id("context-branch")
                         .flex()
                         .items_center()
                         .gap_1()
                         .px_1()
-                        
+                        .min_w(px(48.))
+                        .max_w(relative(0.45))
+                        .flex_shrink(1.)
+                        .overflow_hidden()
                         .bg(rgb(theme::surface0()))
                         .text_color(rgb(theme::green()))
-                        .child(Icon::new(IconName::GitBranch).size(px(11.)))
-                        .child(b),
+                        .child(Icon::new(IconName::GitBranch).size(px(11.)).flex_none())
+                        .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(b))
+                        .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)),
                 )
             })
             .child(
@@ -1491,6 +1649,9 @@ impl Workspace {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let body: AnyView = match self.panel {
+            Panel::Git if self.history_open => cx
+                .new(|_| crate::ui::Placeholder("The history is open in a floating window (Esc closes it)".into()))
+                .into(),
             Panel::Git => self.git.clone().into(),
             Panel::Explorer => self.explorer.clone().into(),
             Panel::Search if self.palette_open => cx
@@ -1682,6 +1843,9 @@ impl Workspace {
             .id("shrink-backdrop")
             .absolute()
             .inset_0()
+            // Clicks, hover and scroll stop here: nothing under the overlay
+            // reacts while it is open.
+            .occlude()
             .flex()
             .items_center()
             .justify_center()
@@ -1973,6 +2137,7 @@ impl Render for Workspace {
             })
             .relative()
             .when(self.palette_open, |el| el.child(self.render_palette(cx)))
+            .when(self.history_open, |el| el.child(self.render_history_window(cx)))
             .when_some(self.pending_shrink.clone(), |el, p| el.child(self.render_shrink_dialog(&p, cx)))
             .child(self.render_toasts(cx))
     }
@@ -2011,6 +2176,23 @@ pub fn square_corners(cx: &mut App) {
 fn content_search_seed(selection: &str) -> Option<String> {
     let text = selection.trim();
     (!text.is_empty() && !text.contains('\n')).then(|| text.to_string())
+}
+
+/// Where the history window's repository lives (see `history_location`).
+pub(crate) struct HistoryLocation {
+    pub repo: Option<PathBuf>,
+    pub branch: Option<String>,
+    /// The cell whose terminal gives the context.
+    pub cell: Option<CellPosition>,
+}
+
+/// A cell in the grid: index, 0-based row and column, terminal id.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CellPosition {
+    pub index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub terminal: u64,
 }
 
 /// `get_selection` result: 1-based, inclusive lines for the model.

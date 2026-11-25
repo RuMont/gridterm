@@ -12,12 +12,14 @@ use std::time::Duration;
 use futures::channel::mpsc::{unbounded, UnboundedSender};
 use futures::StreamExt;
 use git_client::{
-    graph::{Graph, GraphRow}, ChangeKind, CommitInfo, DiffSide, FileChange, FileDiff, GitErrorKind, GitRepo, LineKind, RefKind,
+    graph::{Graph, GraphRow}, ChangeKind, CommitDetails, CommitInfo, DiffSide, FileChange, FileDiff, GitErrorKind, GitRepo, LineKind, RefKind,
     RepoStatus, RepoWatcher, UpstreamPolicy,
 };
 use std::collections::BTreeSet;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::Icon;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -70,6 +72,51 @@ impl OpCtx {
     }
 }
 
+/// One row of the history window's list (all of the same height).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum HRow {
+    Commit(usize),
+    /// The unfolded commit's details band.
+    Band(BandRow),
+    /// File `f` of the unfolded commit, its hunk header, one diff line.
+    File(usize),
+    Hunk(usize, usize),
+    Line(usize, usize, usize),
+    Note(String),
+    /// Closes the unfolded commit.
+    End,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BandRow {
+    /// Full sha and short parents.
+    Sha { sha: String, parents: Vec<String> },
+    /// `Name <email>` and the date.
+    Author { who: String, when: String },
+    /// One line of the message (the first is the summary).
+    Message { text: String, summary: bool },
+    /// The commit's page on the remote.
+    Link(String),
+    Stats(String),
+    Note(String),
+}
+
+/// The details band of an unfolded commit, as rows.
+fn band_rows(d: &CommitDetails) -> Vec<BandRow> {
+    let mut rows = vec![
+        BandRow::Sha { sha: d.sha.clone(), parents: d.parents.iter().map(|p| p.chars().take(7).collect()).collect() },
+        BandRow::Author { who: format!("{} <{}>", d.author_name, d.author_email), when: commit_date(d.author_time) },
+    ];
+    rows.extend(d.message.lines().enumerate().map(|(k, line)| BandRow::Message { text: line.to_string(), summary: k == 0 }));
+    if let Some(url) = &d.web_url {
+        rows.push(BandRow::Link(url.clone()));
+    }
+    let (added, removed) = d.files.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+    let n = d.files.len();
+    rows.push(BandRow::Stats(format!("{n} file{} changed · +{added} −{removed}", if n == 1 { "" } else { "s" })));
+    rows
+}
+
 /// One row of the virtualized list (all rows share the same height).
 #[derive(Clone)]
 enum Row {
@@ -100,6 +147,17 @@ pub struct GitPanel {
     pub(crate) confirm_push: Option<(String, String)>,
     rows: Vec<Row>,
     pub(crate) list_scroll: UniformListScrollHandle,
+    /// The history is shown in the workspace's floating window: the panel
+    /// renders only the history, wide (see `render_expanded`).
+    pub(crate) history_window: bool,
+    history_scroll: UniformListScrollHandle,
+    /// Commit unfolded in the history window, and its details once read.
+    pub(crate) open_commit: Option<String>,
+    pub(crate) commit_details: Option<Result<CommitDetails, String>>,
+    details_task: Option<Task<()>>,
+    /// Rows of the history window: commits, and under the open one its
+    /// details band and diff.
+    pub(crate) history_rows: Vec<HRow>,
     refresh_task: Option<Task<()>>,
     refresh_pending: bool,
     op_task: Option<Task<()>>,
@@ -119,6 +177,11 @@ pub struct GitPanel {
     pub(crate) graph_bounds: std::rc::Rc<std::cell::RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Painted first ref chip of each visible commit (diagnostics/e2e).
     pub(crate) chip_bounds: std::rc::Rc<std::cell::RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    /// Painted bounds of the panel, the toolbar's ahead/behind counters and
+    /// the actions dropdown (e2e).
+    pub(crate) panel_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+    pub(crate) sync_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+    pub(crate) actions_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// Commits that got a revert button in the last render (diagnostics/e2e).
     pub(crate) revert_buttons: std::cell::RefCell<BTreeSet<usize>>,
     diff_task: Option<Task<()>>,
@@ -162,6 +225,12 @@ impl GitPanel {
             confirm_push: None,
             rows: Vec::new(),
             list_scroll: UniformListScrollHandle::new(),
+            history_window: false,
+            history_scroll: UniformListScrollHandle::new(),
+            open_commit: None,
+            commit_details: None,
+            details_task: None,
+            history_rows: Vec::new(),
             refresh_task: None,
             refresh_pending: false,
             op_task: None,
@@ -175,6 +244,9 @@ impl GitPanel {
             graph_time: Duration::ZERO,
             graph_bounds: Default::default(),
             chip_bounds: Default::default(),
+            panel_bounds: Default::default(),
+            sync_bounds: Default::default(),
+            actions_bounds: Default::default(),
             revert_buttons: Default::default(),
             diff_task: None,
             _wake_task: wake_task,
@@ -196,6 +268,9 @@ impl GitPanel {
         self.confirm_revert = None;
         self.confirm_push = None;
         self.expanded = None;
+        self.open_commit = None;
+        self.commit_details = None;
+        self.details_task = None;
         self.watcher = None;
         self.fallback_poll = None;
         if let Some(repo) = &self.repo {
@@ -221,6 +296,106 @@ impl GitPanel {
 
     pub fn on_shown(&mut self, cx: &mut Context<Self>) {
         self.refresh(cx);
+    }
+
+    /// Asks the workspace to show the history in its floating window.
+    pub(crate) fn open_history(&mut self, cx: &mut Context<Self>) {
+        cx.emit(PanelEvent::OpenHistory);
+    }
+
+    /// A commit clicked in the panel's history: the floating window opens
+    /// with that commit unfolded.
+    pub(crate) fn open_history_at(&mut self, sha: String, cx: &mut Context<Self>) {
+        self.open_commit(Some(sha), cx);
+        cx.emit(PanelEvent::OpenHistory);
+    }
+
+    /// Renders only the history, wide, for the floating window (or back).
+    pub fn set_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        if self.history_window != expanded {
+            self.history_window = expanded;
+            if expanded {
+                // Show the unfolded commit (opened from the panel) or the top.
+                let at = self.open_commit.as_ref().and_then(|sha| self.history_row_of(sha)).unwrap_or(0);
+                self.history_scroll.scroll_to_item(at, ScrollStrategy::Top);
+                self.refresh(cx);
+            } else {
+                self.open_commit(None, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Row of commit `sha` in the history window.
+    fn history_row_of(&self, sha: &str) -> Option<usize> {
+        self.history_rows.iter().position(|r| matches!(r, HRow::Commit(i) if self.log.get(*i).is_some_and(|c| c.sha == sha)))
+    }
+
+    /// Unfolds commit `sha` in the history window (folding the previous one),
+    /// reading its details and diff off the UI thread. `None` folds it.
+    pub(crate) fn open_commit(&mut self, sha: Option<String>, cx: &mut Context<Self>) {
+        if self.open_commit == sha {
+            return;
+        }
+        self.open_commit = sha.clone();
+        self.commit_details = None;
+        self.details_task = None;
+        if let (Some(sha), Some(repo)) = (sha, self.repo.clone()) {
+            let work = cx.background_spawn({
+                let sha = sha.clone();
+                async move { repo.commit_details(&sha, 3, MAX_DIFF_LINES).map_err(|e| git_client::friendly_message(&e)) }
+            });
+            self.details_task = Some(cx.spawn(async move |this, cx| {
+                let details = work.await;
+                let _ = this.update(cx, |p, cx| {
+                    if p.open_commit.as_deref() == Some(sha.as_str()) {
+                        p.commit_details = Some(details);
+                        p.rebuild_history_rows();
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        self.rebuild_history_rows();
+        cx.notify();
+    }
+
+    fn toggle_commit(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(sha) = self.log.get(i).map(|c| c.sha.clone()) else { return };
+        let open = (self.open_commit.as_deref() != Some(sha.as_str())).then_some(sha);
+        self.open_commit(open, cx);
+    }
+
+    fn rebuild_history_rows(&mut self) {
+        let mut rows = Vec::with_capacity(self.log.len());
+        for (i, commit) in self.log.iter().enumerate() {
+            rows.push(HRow::Commit(i));
+            if self.open_commit.as_deref() != Some(commit.sha.as_str()) {
+                continue;
+            }
+            match &self.commit_details {
+                None => rows.push(HRow::Band(BandRow::Note("Loading…".into()))),
+                Some(Err(e)) => rows.push(HRow::Band(BandRow::Note(e.clone()))),
+                Some(Ok(d)) => {
+                    rows.extend(band_rows(d).into_iter().map(HRow::Band));
+                    for (f, file) in d.files.iter().enumerate() {
+                        rows.push(HRow::File(f));
+                        if file.diff.binary {
+                            rows.push(HRow::Note("Binary file".into()));
+                        }
+                        for (h, hunk) in file.diff.hunks.iter().enumerate() {
+                            rows.push(HRow::Hunk(f, h));
+                            rows.extend((0..hunk.lines.len()).map(|l| HRow::Line(f, h, l)));
+                        }
+                    }
+                    if d.truncated {
+                        rows.push(HRow::Note(format!("Diff truncated at {MAX_DIFF_LINES} lines")));
+                    }
+                    rows.push(HRow::End);
+                }
+            }
+        }
+        self.history_rows = rows;
     }
 
     pub fn branch_label(&self) -> Option<String> {
@@ -348,6 +523,7 @@ impl GitPanel {
             rows.extend((0..self.log.len()).map(Row::Commit));
         }
         self.rows = rows;
+        self.rebuild_history_rows();
     }
 
     /// Runs a git operation off the UI thread, streaming progress, then
@@ -609,7 +785,7 @@ impl GitPanel {
 
     // ---- rendering -------------------------------------------------------------
 
-    fn render_toolbar(&self, status: &RepoStatus, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toolbar(&self, status: &RepoStatus) -> impl IntoElement {
         let branch = self.branch_label().unwrap_or_else(|| "—".into());
         let sync = |icon: IconName, n: usize, color: u32| {
             div()
@@ -620,7 +796,15 @@ impl GitPanel {
                 .child(Icon::new(icon).size(px(11.)))
                 .child(n.to_string())
         };
-        let tip = |text: &'static str| move |w: &mut Window, cx: &mut App| gpui_kit::component::tooltip::Tooltip::new(text).build(w, cx);
+        // `origin/<branch>` says nothing the branch does not: show the remote.
+        let upstream = status.upstream.clone().map(|up| match up.strip_suffix(&format!("/{branch}")) {
+            Some(remote) => remote.to_string(),
+            None => up,
+        });
+        let full_branch: SharedString = branch.clone().into();
+        let sb = self.sync_bounds.clone();
+        // Long names are cut with "…" (full name in the tooltip); the counters
+        // always stay in the panel.
         div()
             .flex()
             .flex_row()
@@ -629,17 +813,72 @@ impl GitPanel {
             .px_2()
             .py_1()
             .text_xs()
-            .child(Icon::new(IconName::GitBranch).size(px(13.)).text_color(rgb(theme::green())))
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(branch))
-            .when_some(status.upstream.clone(), |el, up| {
-                el.child(div().text_color(rgb(theme::overlay0())).overflow_hidden().whitespace_nowrap().child(format!("→ {up}")))
+            .overflow_hidden()
+            .child(Icon::new(IconName::GitBranch).size(px(13.)).text_color(rgb(theme::green())).flex_none())
+            .child(
+                div()
+                    .id("git-branch")
+                    .min_w(px(40.))
+                    .flex_shrink(1.)
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(branch)
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full_branch.clone()).build(w, cx)),
+            )
+            .when_some(upstream, |el, up| {
+                // The upstream gives way first.
+                el.child(div().min_w_0().flex_shrink(4.).text_color(rgb(theme::overlay0())).overflow_hidden().whitespace_nowrap().text_ellipsis().child(format!("→ {up}")))
             })
-            .child(sync(IconName::ArrowUp, status.ahead, theme::accent()))
-            .child(sync(IconName::ArrowDown, status.behind, theme::peach()))
-            .child(div().flex_1())
-            .child(icon_button("git-pull", IconName::ArrowDownToLine, cx.listener(|this, _: &ClickEvent, w, cx| this.pull(w, cx))).tooltip(tip("Pull")))
-            .child(icon_button("git-push", IconName::ArrowUpFromLine, cx.listener(|this, _: &ClickEvent, w, cx| this.push(w, cx))).tooltip(tip("Push")))
-            .child(icon_button("git-refresh", IconName::RefreshCw, cx.listener(|this, _: &ClickEvent, _, cx| this.refresh(cx))).tooltip(tip("Refresh")))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_row()
+                    .flex_none()
+                    .gap_2()
+                    .child(sync(IconName::ArrowUp, status.ahead, theme::accent()))
+                    .child(sync(IconName::ArrowDown, status.behind, theme::peach()))
+                    .child(canvas(move |b, _, _| sb.set(b), |_, _, _, _| {}).absolute().inset_0()),
+            )
+    }
+
+    /// The chevron next to Commit: undo, pull, push and refresh.
+    fn render_actions_menu(&self, status: &RepoStatus, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel = cx.weak_entity();
+        let idle = self.busy.is_none();
+        let can_undo = self.can_undo && idle;
+        let (ahead, behind) = (status.ahead, status.behind);
+        let hsla = |c: u32| -> Hsla { rgb(c).into() };
+        let style = ButtonCustomVariant::new(cx)
+            .color(hsla(theme::accent()))
+            .foreground(hsla(theme::on_accent()))
+            .hover(hsla(theme::accent_hover()))
+            .active(hsla(theme::accent_hover()));
+        let ab = self.actions_bounds.clone();
+        let button = Button::new("git-actions")
+            .icon(IconName::ChevronDown)
+            .custom(style)
+            .h(px(26.))
+            .w(px(26.))
+            .tooltip("Undo last commit, pull, push, refresh")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                type Action = fn(&mut GitPanel, &mut Window, &mut Context<GitPanel>);
+                let item = |label: String, icon: IconName, enabled: bool, action: Action| {
+                    let panel = panel.clone();
+                    PopupMenuItem::new(label).icon(icon).disabled(!enabled).on_click(move |_, w, cx| {
+                        let _ = panel.update(cx, |p, cx| action(p, w, cx));
+                    })
+                };
+                let count = |label: &str, n: usize, arrow: &str| if n > 0 { format!("{label} ({arrow}{n})") } else { label.to_string() };
+                menu.item(item("Undo last commit".into(), IconName::Undo2, can_undo, GitPanel::undo))
+                    .separator()
+                    .item(item(count("Pull", behind, "↓"), IconName::ArrowDownToLine, idle, GitPanel::pull))
+                    .item(item(count("Push", ahead, "↑"), IconName::ArrowUpFromLine, idle, GitPanel::push))
+                    .item(item("Refresh".into(), IconName::RefreshCw, true, |p, _, cx| p.refresh(cx)))
+            });
+        div().relative().flex_none().child(button).child(canvas(move |b, _, _| ab.set(b), |_, _, _, _| {}).absolute().inset_0())
     }
 
     fn render_commit_box(&self, status: &RepoStatus, cx: &mut Context<Self>) -> impl IntoElement {
@@ -656,7 +895,8 @@ impl GitPanel {
                 div()
                     .flex()
                     .flex_row()
-                    .gap_2()
+                    // A split button: Commit | ▾.
+                    .gap(px(1.))
                     .child(
                         text_button(
                             "git-commit",
@@ -667,10 +907,7 @@ impl GitPanel {
                         )
                         .flex_1(),
                     )
-                    .child(
-                        text_button("git-undo", "Undo last commit", false, self.can_undo && self.busy.is_none(), cx.listener(|this, _: &ClickEvent, w, cx| this.undo(w, cx)))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("git reset --soft HEAD~1 (only unpushed commits)").build(w, cx)),
-                    ),
+                    .child(self.render_actions_menu(status, cx)),
             )
     }
 
@@ -840,8 +1077,25 @@ impl GitPanel {
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_history(cx)))
                 .child(section_header("History", Some(self.log.len())).px_0())
                 .child(Icon::new(if self.show_history { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(12.)))
+                .child(div().flex_1())
+                .child(
+                    icon_button("git-history-expand", IconName::Maximize2, cx.listener(|this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_history(cx);
+                    }))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Open the history in a floating window").build(w, cx)),
+                )
                 .into_any_element(),
-            Row::Commit(i) => {
+            Row::Commit(i) => self.render_commit(i, false, cx),
+        }
+    }
+
+    /// One commit of the history: graph, sha, refs, summary and, in the
+    /// floating window (`wide`), author and date.
+    fn render_commit(&self, i: usize, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        let row_base = |id: ElementId| div().id(id).w_full().h(px(theme::ROW_HEIGHT)).flex().flex_row().items_center().gap_2().px_2().text_xs();
+        {
+            {
                 let commit = self.log[i].clone();
                 let c = commit.clone();
                 let group: SharedString = format!("commit-{i}").into();
@@ -865,10 +1119,26 @@ impl GitPanel {
                 .h_full();
                 let chips = commit.refs.len();
                 let chip_probe = self.chip_bounds.clone();
+                let open = self.open_commit.as_deref() == Some(c.sha.as_str());
+                let sha = c.sha.clone();
                 row_base(("commit", i).into())
                     .group(group.clone())
                     .hover(|s| s.bg(rgb(theme::surface0())))
+                    .when(wide && open, |el| el.bg(rgb(theme::surface0())))
                     .overflow_hidden()
+                    .cursor_pointer()
+                    // In the panel a click opens the window on this commit;
+                    // in the window it unfolds (or folds) the commit.
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if wide {
+                            this.toggle_commit(i, cx);
+                        } else {
+                            this.open_history_at(sha.clone(), cx);
+                        }
+                    }))
+                    .when(wide, |el| {
+                        el.child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(12.)).flex_none().text_color(rgb(theme::overlay0())))
+                    })
                     .child(graph)
                     .child(div().flex_none().font_family("Menlo").text_color(rgb(theme::mauve())).child(c.short_sha.clone()))
                     .children(c.refs.iter().take(MAX_CHIPS).enumerate().map(|(k, r)| {
@@ -913,14 +1183,24 @@ impl GitPanel {
                         )
                     })
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(c.summary.clone()))
-                    .when(revertable, |el| {
-                        el.child(div().flex().invisible().group_hover(group, |s| s.visible()).child(
-                            icon_button(("revert", i), IconName::Undo2, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.confirm_revert = Some(c.clone());
-                                cx.notify();
-                            }))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Revert (new commit) and push").build(w, cx)),
-                        ))
+                    .when(wide, |el| {
+                        el.child(div().flex_none().w(px(AUTHOR_W)).overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(rgb(theme::subtext())).child(c.author.clone()))
+                            .child(div().flex_none().w(px(DATE_W)).text_right().text_color(rgb(theme::overlay0())).child(commit_age(c.time)))
+                    })
+                    // In the wide window every row keeps the revert slot, so
+                    // author and date line up whether it can revert or not.
+                    .when(revertable || wide, |el| {
+                        let c = c.clone();
+                        el.child(div().flex().flex_none().w(px(REVERT_W)).invisible().group_hover(group, |s| s.visible()).when(revertable, |d| {
+                            d.child(
+                                icon_button(("revert", i), IconName::Undo2, cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.confirm_revert = Some(c.clone());
+                                    cx.notify();
+                                }))
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Revert (new commit) and push").build(w, cx)),
+                            )
+                        }))
                     })
                     .into_any_element()
             }
@@ -941,13 +1221,19 @@ impl Render for GitPanel {
         let Some(status) = self.status.clone() else {
             return div().flex().flex_col().flex_1().child(empty_state(self.error.clone().unwrap_or_else(|| "Loading…".into()))).into_any_element();
         };
+        if self.history_window {
+            return self.render_expanded(cx).into_any_element();
+        }
+        let pb = self.panel_bounds.clone();
         div()
             .id("git-panel")
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(self.render_toolbar(&status, cx))
+            .child(canvas(move |b, _, _| pb.set(b), |_, _, _, _| {}).absolute().inset_0())
+            .child(self.render_toolbar(&status))
             .child(self.render_commit_box(&status, cx))
             .child(self.render_banners(cx))
             .child(
@@ -965,6 +1251,216 @@ impl Render for GitPanel {
             )
             .into_any_element()
     }
+}
+
+impl GitPanel {
+    /// The history alone, wide: the body of the workspace's floating window.
+    fn render_expanded(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("git-history-full")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .pt_2()
+            .child(self.render_banners(cx))
+            // Column titles, with the rows' widths.
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .pb_1()
+                    .text_size(px(10.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(theme::overlay0()))
+                    .border_b_1()
+                    .border_color(rgb(theme::surface0()))
+                    .child(div().flex_1().child("COMMIT"))
+                    .child(div().flex_none().w(px(AUTHOR_W)).child("AUTHOR"))
+                    .child(div().flex_none().w(px(DATE_W)).text_right().child("DATE"))
+                    .child(div().flex_none().w(px(REVERT_W))),
+            )
+            .child(if self.log.is_empty() {
+                empty_state("No commits yet.").into_any_element()
+            } else {
+                uniform_list(
+                    "git-history-rows",
+                    self.history_rows.len(),
+                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                        range.map(|ix| this.render_history_row(ix, cx)).collect::<Vec<_>>()
+                    }),
+                )
+                .track_scroll(&self.history_scroll)
+                .flex_1()
+                .into_any_element()
+            })
+    }
+}
+
+impl GitPanel {
+    /// One row of the history window (see [`HRow`]).
+    fn render_history_row(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let row = self.history_rows[ix].clone();
+        let base = |id: ElementId| div().id(id).w_full().h(px(theme::ROW_HEIGHT)).flex().flex_row().items_center().gap_2().text_xs();
+        // Rows under an unfolded commit sit in a tinted band, indented.
+        let band = |id: ElementId| base(id).pl(px(30.)).pr_2().bg(rgb(theme::mantle())).border_l_2().border_color(rgb(theme::accent()));
+        let details = self.commit_details.as_ref().and_then(|d| d.as_ref().ok());
+        match row {
+            HRow::Commit(i) => {
+                self.rendered_history_rows += 1;
+                self.render_commit(i, true, cx)
+            }
+            HRow::Band(b) => {
+                let el = band(("history-band", ix).into()).bg(rgb(theme::surface0()));
+                match b {
+                    BandRow::Sha { sha, parents } => el
+                        .child(div().flex_none().text_color(rgb(theme::overlay0())).child("commit"))
+                        .child(div().flex_none().font_family("Menlo").text_color(rgb(theme::mauve())).child(sha))
+                        .when(!parents.is_empty(), |el| {
+                            el.child(div().flex_none().text_color(rgb(theme::overlay0())).child(if parents.len() > 1 { "parents" } else { "parent" }))
+                                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_family("Menlo").text_color(rgb(theme::subtext())).child(parents.join(" ")))
+                        }),
+                    BandRow::Author { who, when } => el
+                        .child(Icon::new(IconName::User).size(px(12.)).flex_none().text_color(rgb(theme::overlay0())))
+                        .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(rgb(theme::text())).child(who))
+                        .child(div().flex_1())
+                        .child(div().flex_none().text_color(rgb(theme::overlay0())).child(when)),
+                    BandRow::Message { text, summary } => el.child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(rgb(if summary { theme::text() } else { theme::subtext() }))
+                            .when(summary, |d| d.font_weight(FontWeight::SEMIBOLD))
+                            .child(text),
+                    ),
+                    BandRow::Link(url) => {
+                        let host = url.split('/').nth(2).unwrap_or("remote").to_string();
+                        let open = url.clone();
+                        el.child(
+                            div()
+                                .id(("history-link", ix))
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .min_w_0()
+                                .cursor_pointer()
+                                .text_color(rgb(theme::accent()))
+                                .hover(|s| s.underline())
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    terminal::view::open_url(&open);
+                                })
+                                .child(Icon::new(IconName::ExternalLink).size(px(12.)).flex_none())
+                                .child(div().flex_none().child(format!("Open on {host}")))
+                                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(rgb(theme::overlay0())).child(url)),
+                        )
+                    }
+                    BandRow::Stats(text) => el.child(div().text_color(rgb(theme::overlay0())).child(text)),
+                    BandRow::Note(text) => el.child(div().italic().text_color(rgb(theme::overlay0())).child(text)),
+                }
+                .into_any_element()
+            }
+            HRow::File(f) => {
+                let Some(file) = details.and_then(|d| d.files.get(f)) else { return div().into_any_element() };
+                let color = match file.status {
+                    'A' => theme::green(),
+                    'D' => theme::red(),
+                    'R' | 'C' => theme::mauve(),
+                    _ => theme::yellow(),
+                };
+                let path = match &file.old_path {
+                    Some(old) => format!("{} → {}", old.display(), file.diff.path.display()),
+                    None => file.diff.path.display().to_string(),
+                };
+                band(("history-file", ix).into())
+                    .bg(rgb(theme::base()))
+                    .child(div().flex_none().w(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(color)).child(file.status.to_string()))
+                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().font_weight(FontWeight::MEDIUM).text_color(rgb(theme::text())).child(path))
+                    .child(div().flex_none().text_color(rgb(theme::green())).child(format!("+{}", file.added)))
+                    .child(div().flex_none().text_color(rgb(theme::red())).child(format!("−{}", file.removed)))
+                    .into_any_element()
+            }
+            HRow::Hunk(f, h) => {
+                let header = details.and_then(|d| d.files.get(f)).and_then(|file| file.diff.hunks.get(h)).map(|h| h.header.clone()).unwrap_or_default();
+                band(("history-hunk", ix).into())
+                    .font_family("Menlo")
+                    .text_color(rgb(theme::overlay0()))
+                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(header))
+                    .into_any_element()
+            }
+            HRow::Line(f, h, l) => {
+                let Some(line) = details.and_then(|d| d.files.get(f)).and_then(|file| file.diff.hunks.get(h)).and_then(|h| h.lines.get(l)) else {
+                    return div().into_any_element();
+                };
+                let (sign, fg, tint) = match line.kind {
+                    LineKind::Added => ("+", theme::green(), Some(theme::green())),
+                    LineKind::Removed => ("-", theme::red(), Some(theme::red())),
+                    LineKind::Context => (" ", theme::subtext(), None),
+                };
+                let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
+                band(("history-line", ix).into())
+                    .gap_1()
+                    .font_family("Menlo")
+                    .when_some(tint, |el, c| el.bg(rgba(c << 8 | 0x1a)))
+                    .child(div().w(px(40.)).flex_none().text_right().text_color(rgb(theme::overlay0())).child(num(line.old_lineno)))
+                    .child(div().w(px(40.)).flex_none().text_right().text_color(rgb(theme::overlay0())).child(num(line.new_lineno)))
+                    .child(div().w(px(12.)).flex_none().text_color(rgb(fg)).child(sign))
+                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(fg)).child(line.text.trim_end_matches('\r').replace('\t', "    ")))
+                    .into_any_element()
+            }
+            HRow::Note(text) => band(("history-note", ix).into()).child(div().italic().text_color(rgb(theme::overlay0())).child(text)).into_any_element(),
+            HRow::End => div().id(("history-end", ix)).w_full().h(px(theme::ROW_HEIGHT)).border_t_1().border_color(rgb(theme::surface1())).into_any_element(),
+        }
+    }
+}
+
+/// Columns of the floating history window.
+const AUTHOR_W: f32 = 180.0;
+const DATE_W: f32 = 96.0;
+/// The revert button (an `icon_button`).
+const REVERT_W: f32 = 22.0;
+
+/// How long ago a commit was made ("5 min", "3 h", "2 d"), or its date
+/// (UTC) past a month.
+pub(crate) fn commit_age(time: i64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let secs = (now - time).max(0);
+    match secs {
+        s if s < 60 => "now".into(),
+        s if s < 3600 => format!("{} min", s / 60),
+        s if s < 86_400 => format!("{} h", s / 3600),
+        s if s < 30 * 86_400 => format!("{} d", s / 86_400),
+        _ => {
+            let (year, month, day, _, _) = civil(time);
+            format!("{year:04}-{month:02}-{day:02}")
+        }
+    }
+}
+
+/// `2025-11-25 14:03 UTC · 3 h` (date and how long ago).
+pub(crate) fn commit_date(time: i64) -> String {
+    let (year, month, day, hour, minute) = civil(time);
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC · {}", commit_age(time))
+}
+
+/// UTC date and time of unix time `time` (H. Hinnant's civil-from-days).
+fn civil(time: i64) -> (i64, i64, i64, i64, i64) {
+    let z = time.div_euclid(86_400) + 719_468;
+    let secs = time.rem_euclid(86_400);
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day, secs / 3600, secs % 3600 / 60)
 }
 
 /// Width of one graph lane: the graph stays compact.
