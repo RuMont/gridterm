@@ -1,6 +1,7 @@
 //! User configuration, read from `~/.config/gridterm/config.toml`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -77,6 +78,16 @@ pub struct UiConfig {
     pub sidebar_width: f32,
     pub sidebar_visible: bool,
     pub theme: ThemeMode,
+    /// Side of the window holding the activity bar and the sidebar.
+    pub sidebar_side: SidebarSide,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarSide {
+    #[default]
+    Left,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,7 +131,7 @@ impl Default for TerminalConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { sidebar_width: 300.0, sidebar_visible: true, theme: ThemeMode::Dark }
+        Self { sidebar_width: 300.0, sidebar_visible: true, theme: ThemeMode::Dark, sidebar_side: SidebarSide::Left }
     }
 }
 
@@ -181,6 +192,51 @@ impl Config {
     }
 }
 
+/// Keyboard shortcut overrides, in `keymap.toml` next to `config.toml`.
+///
+/// Maps a command id (see the app's command list) to its shortcuts, e.g.
+/// `show_git = ["cmd-g"]`. Commands not listed keep their defaults; an empty
+/// list leaves the command without a shortcut.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Keymap {
+    pub bindings: BTreeMap<String, Vec<String>>,
+}
+
+impl Keymap {
+    pub fn path() -> Option<PathBuf> {
+        Config::dir().map(|d| d.join("keymap.toml"))
+    }
+
+    /// Loads the overrides, falling back to none on any error.
+    pub fn load() -> Self {
+        let Some(path) = Self::path() else { return Self::default() };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
+                log::warn!("invalid keymap {}: {e}", path.display());
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// Writes the overrides; with none left the file is removed.
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = Self::path().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
+        if self.bindings.is_empty() {
+            match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => return Ok(()),
+            }
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +268,21 @@ mod tests {
         assert_eq!(cfg.ui.theme, ThemeMode::Light);
         assert!(!cfg.terminal.cursor_blink);
         assert_eq!(Config::default().ui.theme, ThemeMode::Dark);
+    }
+
+    #[test]
+    fn sidebar_side_parses() {
+        let cfg = Config::parse("[ui]\nsidebar_side = \"right\"\n").unwrap();
+        assert_eq!(cfg.ui.sidebar_side, SidebarSide::Right);
+        assert_eq!(Config::default().ui.sidebar_side, SidebarSide::Left);
+    }
+
+    #[test]
+    fn keymap_roundtrip() {
+        let km: Keymap = toml::from_str("[bindings]\nshow_git = [\"cmd-g\"]\nclear = []\n").unwrap();
+        assert_eq!(km.bindings["show_git"], vec!["cmd-g".to_string()]);
+        assert!(km.bindings["clear"].is_empty());
+        assert_eq!(toml::from_str::<Keymap>(&toml::to_string(&km).unwrap()).unwrap(), km);
     }
 
     #[test]

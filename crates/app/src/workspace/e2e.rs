@@ -2003,6 +2003,32 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok(format!("{} updates", seen.len()))
     });
 
+    case!(r, "Gi13", "Si git espera a Git Credential Manager (p. ej. elegir cuenta), el panel lo dice en vez de parecer colgado", {
+        // A pre-push hook stands in for GCM: a silent process with its name,
+        // in git's process group, like the real helper waiting on its window.
+        let hooks = repo.parent().unwrap().join("hooks-gcm");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let fake = hooks.join("git-credential-manager");
+        write(&fake, "#!/bin/sh\nsleep 4\n");
+        write(&hooks.join("pre-push"), &format!("#!/bin/sh\n'{}'\n", fake.display()));
+        for f in [&fake, &hooks.join("pre-push")] {
+            std::fs::set_permissions(f, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        }
+        git(&repo, &["config", "core.hooksPath", &hooks.to_string_lossy()]);
+        write(&repo.join("gcm_wait.txt"), "x\n");
+        git(&repo, &["add", "gcm_wait.txt"]);
+        git(&repo, &["commit", "-q", "-m", "gcm wait"]);
+        r.with(|ws, w, cx| ws.git.update(cx, |g, cx| g.push(w, cx)));
+        let shown = r.wait_until(4000, |ws, cx| ws.git.read(cx).progress.as_deref() == Some(git_client::CREDENTIAL_PROMPT)).await;
+        let status = r.read(|ws, cx| ws.git.read(cx).status_text());
+        r.shot("Gi13-credential-prompt");
+        let done = r.wait_until(8000, |ws, cx| ws.git.read(cx).busy.is_none()).await;
+        git(&repo, &["config", "--unset", "core.hooksPath"]);
+        let shown = shown.ok_or_else(|| format!("no credential notice; status {status:?}"))?;
+        done.ok_or("the push did not finish after the helper exited")?;
+        Ok(format!("aviso a los {shown:?} de silencio; el push terminó después"))
+    });
+
     case!(r, "Gi9", "Error non-fast-forward con mensaje accionable", {
         write(&fx.clone2.join("remote_change.txt"), "r\n");
         git(&fx.clone2, &["pull", "-q"]);
@@ -2169,6 +2195,107 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         r.sleep(100).await;
         ensure!(escaped.is_empty(), "focus left the sidebar after {escaped:?}");
         Ok("12 pulsaciones, el foco sigue en el sidebar".into())
+    });
+
+    case!(r, "KB1", "Settings → atajos: grabar uno nuevo, quitarlo a quien lo tenía, rechazar teclas sueltas, guardar y restablecer", {
+        r.key("cmd-1");
+        r.with(|ws, w, cx| {
+            ws.show_panel(Panel::Settings, w, cx);
+            ws.open_keymap(w, cx);
+        });
+        r.sleep(200).await;
+        let bound_to = |r: &mut Runner<'_>, key: &'static str| -> Vec<String> {
+            r.app(move |_, cx| {
+                let want = Keystroke::parse(key).unwrap();
+                let keymap = cx.key_bindings();
+                let keymap = keymap.borrow();
+                keymap
+                    .bindings()
+                    .filter(|b| b.keystrokes().len() == 1 && b.keystrokes()[0].inner().modifiers == want.modifiers && b.keystrokes()[0].inner().key == want.key)
+                    .map(|b| b.action().name().to_string())
+                    .collect()
+            })
+        };
+        let editor = |r: &mut Runner<'_>| r.read(|ws, _| ws.keymap_editor.clone()).ok_or("the shortcuts window is not open");
+        let ed = editor(r)?;
+        let result: Result<String, String> = async {
+            // A plain letter is typing, not a shortcut: refused, still recording.
+            r.app({ let ed = ed.clone(); move |_, cx| ed.update(cx, |e, cx| e.start_recording("show_git", cx)) });
+            r.key("g");
+            let (rec, note) = r.app({ let ed = ed.clone(); move |_, cx| (ed.read(cx).recording(), ed.read(cx).note()) });
+            ensure!(rec == Some("show_git") && note.as_deref().is_some_and(|n| n.contains("needs")), "plain g: recording {rec:?}, note {note:?}");
+            // ⇧⌘E belongs to Explorer: Git takes it, Explorer loses it. The
+            // keystroke does not run Explorer while recording.
+            r.key("cmd-shift-e");
+            r.sleep(100).await;
+            let (rec, note) = r.app({ let ed = ed.clone(); move |_, cx| (ed.read(cx).recording(), ed.read(cx).note()) });
+            ensure!(rec.is_none(), "still recording after ⇧⌘E");
+            ensure!(note.as_deref().is_some_and(|n| n.contains("Explorer")), "note {note:?}");
+            let panel = r.read(|ws, _| ws.panel);
+            ensure!(panel == Panel::Settings, "⇧⌘E ran while recording: panel {panel:?}");
+            let now = bound_to(r, "cmd-shift-e");
+            ensure!(now == ["gridterm::ShowGit"], "⇧⌘E is bound to {now:?}");
+            let old = bound_to(r, "cmd-shift-g");
+            ensure!(old.is_empty(), "⇧⌘G still bound to {old:?}");
+            let file = config::Keymap::path().ok_or("no keymap path")?;
+            let saved = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            ensure!(saved.contains("show_git") && saved.contains("show_explorer"), "keymap.toml:\n{saved}");
+            r.shot("KB1-editor");
+            // Esc closes the window; the new shortcut works.
+            r.key("escape");
+            r.sleep(100).await;
+            ensure!(r.read(|ws, _| ws.keymap_editor.is_none()), "Esc did not close the window");
+            r.key("cmd-shift-e");
+            r.sleep(150).await;
+            let panel = r.read(|ws, _| (ws.sidebar_visible, ws.panel));
+            ensure!(panel == (true, Panel::Git), "⇧⌘E after the change: {panel:?}");
+            let hint = r.app(|_, cx| crate::actions::hint("Git", "show_git", cx));
+            ensure!(hint.contains('E'), "tooltip {hint:?}");
+            Ok(format!("⇧⌘E → Git, Explorer sin atajo, guardado en {}", file.display()))
+        }
+        .await;
+        // Reset all: defaults back, file removed.
+        r.with(|ws, w, cx| ws.open_keymap(w, cx));
+        let ed = editor(r)?;
+        r.app(move |_, cx| ed.update(cx, |e, cx| e.reset_all(cx)));
+        r.sleep(100).await;
+        r.key("escape");
+        r.sleep(100).await;
+        let result = result?;
+        let back = bound_to(r, "cmd-shift-g");
+        ensure!(back == ["gridterm::ShowGit"], "after Reset all ⇧⌘G is bound to {back:?}");
+        let file = config::Keymap::path().ok_or("no keymap path")?;
+        ensure!(!file.exists(), "keymap.toml left after Reset all");
+        Ok(result)
+    });
+
+    case!(r, "SB1", "Settings → sidebar a la derecha: barra y panel a la derecha, el grid a la izquierda", {
+        r.key("cmd-1");
+        r.with(|ws, w, cx| ws.show_panel(Panel::Settings, w, cx));
+        let side = |r: &mut Runner<'_>, right: bool| {
+            r.with(move |ws, w, cx| {
+                let mut c = ws.config.clone();
+                c.ui.sidebar_side = if right { config::SidebarSide::Right } else { config::SidebarSide::Left };
+                ws.settings.update(cx, |s, cx| s.set_config(c.clone(), cx));
+                ws.apply_config(c, w, cx);
+            })
+        };
+        let grid_x = |r: &mut Runner<'_>| r.read(|ws, _| (f32::from(ws.grid_bounds.get().origin.x), f32::from(ws.grid_bounds.get().size.width)));
+        r.sleep(150).await;
+        let (left_x, _) = grid_x(r);
+        side(r, true);
+        r.sleep(200).await;
+        let (right_x, right_w) = grid_x(r);
+        r.shot("SB1-right");
+        let window_w = r.app(|w, _| f32::from(w.viewport_size().width));
+        side(r, false);
+        r.sleep(200).await;
+        let (back_x, _) = grid_x(r);
+        ensure!(left_x > 200.0, "sidebar on the left: grid starts at {left_x}");
+        ensure!(right_x < 10.0, "sidebar on the right: grid starts at {right_x}");
+        ensure!(right_x + right_w < window_w - 200.0, "sidebar on the right: grid ends at {} of {window_w}", right_x + right_w);
+        ensure!((back_x - left_x).abs() < 1.0, "back on the left: grid at {back_x}, was {left_x}");
+        Ok(format!("grid en x={left_x} → {right_x} → {back_x}"))
     });
 
     u6_heavy_search(r, &fx.base, &repo_s).await;

@@ -139,6 +139,23 @@ impl Render for SettingsPanel {
             .child(self.toggle("light", "Light theme", c.ui.theme == config::ThemeMode::Light, cx, |c| {
                 c.ui.theme = if c.ui.theme == config::ThemeMode::Light { config::ThemeMode::Dark } else { config::ThemeMode::Light }
             }))
+            .child(self.toggle("sidebar-right", "Sidebar on the right", c.ui.sidebar_side == config::SidebarSide::Right, cx, |c| {
+                c.ui.sidebar_side = match c.ui.sidebar_side {
+                    config::SidebarSide::Left => config::SidebarSide::Right,
+                    config::SidebarSide::Right => config::SidebarSide::Left,
+                }
+            }))
+            .child(section_header("Keyboard", None))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_3()
+                    .pb_2()
+                    .child(text_button("open-keymap", "Keyboard shortcuts…", false, true, cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::OpenKeymap))))
+                    .child(div().text_xs().text_color(rgb(theme::overlay0())).child("Change the shortcut of any action: panels, focus, cells, terminal and file viewer.")),
+            )
             .child(section_header("Agents", None))
             .child(self.toggle("claude-ide", "Claude Code /ide integration", c.agents.claude_ide, cx, |c| c.agents.claude_ide = !c.agents.claude_ide))
             .child(

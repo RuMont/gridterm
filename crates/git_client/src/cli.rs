@@ -21,6 +21,14 @@ const TERM_GRACE: Duration = Duration::from_millis(400);
 /// How long to keep reading output after the child exited, in case a
 /// detached grandchild still holds the pipes open.
 const EXIT_DRAIN: Duration = Duration::from_millis(500);
+/// Silence after which a streaming run checks whether a credential helper
+/// is waiting for the user, and how often it checks again.
+const PROMPT_AFTER: Duration = Duration::from_secs(2);
+const PROMPT_PROBE: Duration = Duration::from_secs(1);
+/// Shown as progress while Git Credential Manager waits for an answer (with
+/// several accounts for a host it asks which one, in a window of its own).
+pub const CREDENTIAL_PROMPT: &str =
+    "waiting for Git Credential Manager: answer its window (it may be behind gridterm)";
 
 /// Output of a successful git invocation.
 #[derive(Debug)]
@@ -168,12 +176,33 @@ pub(crate) fn run_streaming(
     // Forward output until both pipes close. A detached grandchild could
     // keep a pipe open forever, so stop shortly after the child has exited.
     let mut exited: Option<(ExitStatus, Instant)> = None;
+    let pgid = child.id();
+    let mut last_output = Instant::now();
+    let mut last_probe: Option<Instant> = None;
+    let mut prompting = false;
     loop {
         if exited.is_none() && cancel.load(Ordering::SeqCst) {
             terminate_group(&mut child);
             return Err(cancelled());
         }
-        match rx.recv_timeout(POLL_INTERVAL) {
+        // A silent git may be waiting for a credential helper's window: say
+        // so, or the operation looks hung.
+        if exited.is_none()
+            && last_output.elapsed() >= PROMPT_AFTER
+            && last_probe.is_none_or(|t| t.elapsed() >= PROMPT_PROBE)
+        {
+            last_probe = Some(Instant::now());
+            let now = credential_prompt_running(pgid);
+            if now && !prompting {
+                progress(CREDENTIAL_PROMPT);
+            }
+            prompting = now;
+        }
+        let chunk = rx.recv_timeout(POLL_INTERVAL);
+        if chunk.is_ok() {
+            last_output = Instant::now();
+        }
+        match chunk {
             Ok(Chunk::Out(bytes)) => out.extend_from_slice(&bytes),
             Ok(Chunk::Err(bytes)) => {
                 err.extend_from_slice(&bytes);
@@ -255,6 +284,18 @@ fn spawn_reader(
     Ok(())
 }
 
+/// Whether Git Credential Manager runs in process group `pgid` (git starts
+/// its credential helpers in its own group).
+fn credential_prompt_running(pgid: u32) -> bool {
+    Command::new("/usr/bin/pgrep")
+        .args(["-g", &pgid.to_string(), "-f", "git-credential-manager"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 fn cancelled() -> anyhow::Error {
     GitError::new(GitErrorKind::Cancelled, "cancelled").into()
 }
@@ -310,6 +351,32 @@ fn settle_progress(text: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn a_waiting_credential_manager_is_reported() {
+        // A stand-in named like GCM, silent for a while in git's group.
+        let dir = std::env::temp_dir().join(format!("gridterm-gcm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("git-credential-manager");
+        std::fs::write(&fake, "#!/bin/sh\nsleep 3.5\n").unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("'{}'; echo done >&2", fake.display())]);
+        let mut lines = Vec::new();
+        let (status, _) = run_streaming(cmd, &mut |l| lines.push(l.to_owned()), &AtomicBool::new(false)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(status.success());
+        assert_eq!(lines, [CREDENTIAL_PROMPT, "done"]);
+    }
+
+    #[test]
+    fn a_silent_command_is_not_a_prompt() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 2.5; echo done >&2"]);
+        let mut lines = Vec::new();
+        run_streaming(cmd, &mut |l| lines.push(l.to_owned()), &AtomicBool::new(false)).unwrap();
+        assert_eq!(lines, ["done"]);
+    }
 
     #[test]
     fn streams_lines_split_on_cr_and_lf() {

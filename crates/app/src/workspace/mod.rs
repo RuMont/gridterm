@@ -161,6 +161,9 @@ pub struct Workspace {
     /// Container of the sidebar: Tab/⇧Tab cycle inside it instead of jumping
     /// into the cells (those are reached with ⌘1…9).
     pub(crate) sidebar_focus: FocusHandle,
+    /// Settings → Keyboard shortcuts, while open.
+    pub(crate) keymap_editor: Option<Entity<crate::keymap_editor::KeymapEditor>>,
+    keymap_sub: Option<Subscription>,
     /// Painted bounds of the dialog's Cancel and Close buttons (e2e).
     pub(crate) shrink_buttons: std::rc::Rc<std::cell::Cell<(Bounds<Pixels>, Bounds<Pixels>)>>,
     /// Claude Code IDE integration (`/ide`), when enabled.
@@ -271,6 +274,8 @@ impl Workspace {
             pending_shrink: None,
             shrink_focus: cx.focus_handle(),
             sidebar_focus: cx.focus_handle(),
+            keymap_editor: None,
+            keymap_sub: None,
             shrink_buttons: Default::default(),
             ide: None,
             ide_conns: Default::default(),
@@ -1499,10 +1504,42 @@ impl Workspace {
                 self.apply_config(config.clone(), window, cx);
                 return;
             }
+            PanelEvent::OpenKeymap => {
+                self.open_keymap(window, cx);
+                return;
+            }
         }
         if self.palette_open {
             self.palette_open = false;
             self.sync_search_visibility(cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn open_keymap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::keymap_editor::{KeymapEditor, KeymapEditorEvent};
+        let keymap = cx.try_global::<crate::actions::CurrentKeymap>().map(|k| k.0.clone()).unwrap_or_default();
+        let editor = cx.new(|cx| KeymapEditor::new(keymap, cx));
+        self.keymap_sub = Some(cx.subscribe_in(&editor, window, |this, _, event: &KeymapEditorEvent, window, cx| match event {
+            KeymapEditorEvent::Changed(keymap) => {
+                crate::actions::apply_keymap(cx, keymap.clone());
+                if let Err(e) = keymap.save() {
+                    this.notify_user(format!("Could not save the shortcuts: {e:#}"), true, window, cx);
+                }
+                cx.notify();
+            }
+            KeymapEditorEvent::Close => this.close_keymap(window, cx),
+        }));
+        let focus = editor.read(cx).focus.clone();
+        window.focus(&focus, cx);
+        self.keymap_editor = Some(editor);
+        cx.notify();
+    }
+
+    pub(crate) fn close_keymap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.keymap_editor.take().is_some() {
+            self.keymap_sub = None;
+            self.focus_active_terminal(&FocusActiveTerminal, window, cx);
             cx.notify();
         }
     }
@@ -1579,7 +1616,8 @@ impl Workspace {
     // ---- rendering ---------------------------------------------------------------
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let item = |id: &'static str, icon: IconName, panel: Panel, hint: &'static str, cx: &mut Context<Self>| {
+        let right = self.sidebar_right();
+        let item = |id: &'static str, icon: IconName, panel: Panel, label: &'static str, command: &'static str, cx: &mut Context<Self>| {
             let active = self.sidebar_visible && self.panel == panel;
             div()
                 .id(id)
@@ -1592,9 +1630,11 @@ impl Workspace {
                 .text_color(rgb(if active { theme::text() } else { theme::overlay0() }))
                 .hover(|s| s.text_color(rgb(theme::text())))
                 .when(active, |el| {
-                    el.child(div().absolute().left_0().top(px(10.)).w(px(2.)).h(px(24.)).bg(rgb(theme::accent())))
+                    // On the edge away from the sidebar.
+                    let bar = div().absolute().top(px(10.)).w(px(2.)).h(px(24.)).bg(rgb(theme::accent()));
+                    el.child(if right { bar.right_0() } else { bar.left_0() })
                 })
-                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(hint).build(window, cx))
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint(label, command, cx)).build(window, cx))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_panel(panel, window, cx)))
                 .child(Icon::new(icon).size(px(18.)))
         };
@@ -1605,11 +1645,11 @@ impl Workspace {
             .w(px(theme::ACTIVITY_BAR_WIDTH))
             .h_full()
             .bg(rgb(theme::crust()))
-            .border_r_1()
+            .map(|el| if right { el.border_l_1() } else { el.border_r_1() })
             .border_color(rgb(theme::surface0()))
-            .child(item("act-git", IconName::GitBranch, Panel::Git, "Git  ⇧⌘G", cx))
-            .child(item("act-files", IconName::FolderTree, Panel::Explorer, "Explorer  ⇧⌘E", cx))
-            .child(item("act-search", IconName::FileSearch, Panel::Search, "Find file  ⌘P", cx))
+            .child(item("act-git", IconName::GitBranch, Panel::Git, "Git", "show_git", cx))
+            .child(item("act-files", IconName::FolderTree, Panel::Explorer, "Explorer", "show_explorer", cx))
+            .child(item("act-search", IconName::FileSearch, Panel::Search, "Find file", "show_search", cx))
             .child(div().flex_1())
             .child(
                 div()
@@ -1621,11 +1661,11 @@ impl Workspace {
                     .cursor_pointer()
                     .text_color(rgb(theme::overlay0()))
                     .hover(|s| s.text_color(rgb(theme::text())))
-                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("New terminal  ⌘T").build(window, cx))
+                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint("New terminal", "new_terminal", cx)).build(window, cx))
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.request_terminal(window, cx)))
                     .child(Icon::new(IconName::SquareTerminal).size(px(18.))),
             )
-            .child(item("act-settings", IconName::Settings, Panel::Settings, "Settings  ⌘,", cx))
+            .child(item("act-settings", IconName::Settings, Panel::Settings, "Settings", "show_settings", cx))
     }
 
     fn render_context_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1694,6 +1734,10 @@ impl Workspace {
             )
     }
 
+    pub(crate) fn sidebar_right(&self) -> bool {
+        self.config.ui.sidebar_side == config::SidebarSide::Right
+    }
+
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let body: AnyView = match self.panel {
             Panel::Git if self.history_open => cx
@@ -1716,7 +1760,7 @@ impl Workspace {
             .w(self.sidebar_width)
             .h_full()
             .bg(rgb(theme::mantle()))
-            .border_r_1()
+            .map(|el| if self.sidebar_right() { el.border_l_1() } else { el.border_r_1() })
             .border_color(rgb(theme::surface0()))
             .text_color(rgb(theme::text()))
             .on_action(cx.listener(Self::focus_active_terminal))
@@ -1729,7 +1773,8 @@ impl Workspace {
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .right(px(-3.))
+                    // On the edge facing the grid.
+                    .map(|el| if self.sidebar_right() { el.left(px(-3.)) } else { el.right(px(-3.)) })
                     .w(px(6.))
                     .cursor(CursorStyle::ResizeLeftRight)
                     .hover(|s| s.bg(rgba(theme::accent_alpha(0x55))))
@@ -1852,7 +1897,7 @@ impl Workspace {
             .text_color(rgb(theme::overlay0()))
             .cursor_pointer()
             .hover(|s| s.border_color(rgb(theme::accent())).text_color(rgb(theme::accent())))
-            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("New terminal…  ⌘T").build(window, cx))
+            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint("New terminal…", "new_terminal", cx)).build(window, cx))
             // Keep focus where it is (the workspace root would take it).
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.request_terminal(window, cx)))
@@ -2030,7 +2075,10 @@ impl Workspace {
             self.drag_grid(position, cx);
         }
         if let Some((start_x, start_w)) = self.resizing_sidebar {
-            let w = (f32::from(start_w) + f32::from(position.x) - start_x).clamp(MIN_SIDEBAR, MAX_SIDEBAR);
+            // Dragging towards the grid widens it: rightwards on the left side.
+            let delta = f32::from(position.x) - start_x;
+            let delta = if self.sidebar_right() { -delta } else { delta };
+            let w = (f32::from(start_w) + delta).clamp(MIN_SIDEBAR, MAX_SIDEBAR);
             self.sidebar_width = px(w);
             self.config.ui.sidebar_width = w;
             cx.notify();
@@ -2146,9 +2194,16 @@ impl Render for Workspace {
                     .flex_row()
                     .flex_1()
                     .min_h_0()
-                    .child(self.render_activity_bar(cx))
-                    .when(self.sidebar_visible, |el| el.child(self.render_sidebar(cx)))
-                    .child(self.render_grid(cx)),
+                    .map(|el| {
+                        let bar = self.render_activity_bar(cx).into_any_element();
+                        let sidebar = self.sidebar_visible.then(|| self.render_sidebar(cx).into_any_element());
+                        let grid = self.render_grid(cx);
+                        if self.sidebar_right() {
+                            el.child(grid).children(sidebar).child(bar)
+                        } else {
+                            el.child(bar).children(sidebar).child(grid)
+                        }
+                    }),
             )
             .child(self.render_status_bar(cx))
             // Separator/sidebar drags follow the pointer at window level:
@@ -2187,6 +2242,7 @@ impl Render for Workspace {
             .when(self.palette_open, |el| el.child(self.render_palette(cx)))
             .when(self.history_open, |el| el.child(self.render_history_window(cx)))
             .when_some(self.pending_shrink.clone(), |el, p| el.child(self.render_shrink_dialog(&p, cx)))
+            .when_some(self.keymap_editor.clone(), |el, editor| el.child(editor))
             .child(self.render_toasts(cx))
     }
 }

@@ -17,6 +17,7 @@ mod watcher;
 
 use std::path::{Component, Path, PathBuf};
 
+pub use cli::CREDENTIAL_PROMPT;
 pub use commit::{commit_web_url, CommitDetails, CommitFile};
 pub use diff::{DiffLine, DiffSide, FileDiff, Hunk, LineKind};
 pub use error::{error_kind, friendly_message, GitErrorKind};

@@ -24,6 +24,8 @@ pub enum PanelEvent {
     /// files refresh their change marks.
     RepoChanged,
     ConfigChanged(config::Config),
+    /// Open the keyboard shortcuts editor.
+    OpenKeymap,
 }
 
 impl PanelEvent {

@@ -146,7 +146,7 @@ pub struct GitPanel {
     pub(crate) log: Vec<CommitInfo>,
     pub(crate) can_undo: bool,
     pub(crate) busy: Option<&'static str>,
-    progress: Option<String>,
+    pub(crate) progress: Option<String>,
     cancel: Option<Arc<AtomicBool>>,
     error: Option<String>,
     pub(crate) message: Entity<TextareaState>,
@@ -1048,6 +1048,22 @@ impl GitPanel {
                         .when(self.cancel.is_some(), |el| {
                             el.child(text_button("git-cancel", "Cancel", false, true, cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_operation(cx))))
                         }),
+                )
+            })
+            // Git Credential Manager asks in a window of its own, easy to
+            // miss behind gridterm: spelled out in full, not ellipsized.
+            .when(self.busy.is_some() && self.progress.as_deref() == Some(git_client::CREDENTIAL_PROMPT), |el| {
+                el.child(
+                    banner()
+                        .id("git-credential-prompt")
+                        .border_color(rgb(theme::peach()))
+                        .text_color(rgb(theme::text()))
+                        .child("Git Credential Manager is waiting for you: answer its window (with several accounts for this host it asks which one to use). It may be behind gridterm.")
+                        .child(
+                            div()
+                                .text_color(rgb(theme::overlay0()))
+                                .child("To stop it asking, pick the account once: git config --global credential.https://<host>.username <user>"),
+                        ),
                 )
             })
             .when_some(self.confirm_push.clone(), |el, (remote, branch)| {

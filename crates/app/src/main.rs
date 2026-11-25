@@ -3,6 +3,7 @@ mod cell;
 mod definition;
 mod diff_highlight;
 mod highlight;
+mod keymap_editor;
 mod panels;
 mod session;
 mod theme;
@@ -31,7 +32,7 @@ fn main() {
         terminal::colors::set_light(light);
         Theme::change(if light { ThemeMode::Light } else { ThemeMode::Dark }, None, cx);
         workspace::square_corners(cx);
-        actions::bind_keys(cx);
+        actions::apply_keymap(cx, config::Keymap::load());
         cx.on_action(|_: &actions::Quit, cx| cx.quit());
         cx.set_menus(vec![Menu {
             name: "gridterm".into(),

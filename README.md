@@ -46,6 +46,8 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | Arrastrar, doble o triple clic | Seleccionar texto, también dentro de programas que solo reciben clics (Claude Code). En los que siguen el arrastre (vim con `mouse=a`, tmux), con ⇧ |
 | ⇧PgUp / ⇧PgDn, ⌘Home / ⌘End | Scroll del historial |
 
+Todos estos atajos (salvo Esc, Tab y ⌘Q) se pueden cambiar en Ajustes → Keyboard shortcuts…: clic en el atajo de una acción y pulsar la combinación nueva (necesita ⌘, ⌃ o ⌥, o una tecla F; Esc cancela). Si otra acción del mismo ámbito ya la tenía, se le quita y se avisa. Los cambios se aplican al momento y se guardan en `~/.config/gridterm/keymap.toml` (solo lo que difiere de los atajos por defecto; ↺ devuelve una acción a su atajo por defecto y Reset all, todas). Los tooltips muestran el atajo vigente.
+
 En la paleta de File Search: ↩ (o doble clic) abre el archivo como pestaña de la celda activa, ⇧↩ inserta la ruta en la terminal activa, ⌥↩ hace `cd` a su carpeta, ⌘↩ la muestra en el Explorer, ⌘⇧C copia la ruta y Esc (o un clic fuera) cierra la paleta.
 
 En el Explorer: clic en un archivo = vista previa (pestaña en cursiva que el siguiente clic reemplaza; el foco se queda en el Explorer), doble clic = pestaña fijada. Con teclado: Espacio previsualiza, ↩ abre, ⌥↩ inserta la ruta en la terminal. Clic en una línea de la búsqueda por contenido abre el archivo en esa línea. Si al pulsar ⇧⌘F hay texto seleccionado (en la terminal o en un archivo) y cabe en una línea, se busca directamente. Las acciones de cada fila son: insertar la ruta, `cd` a la carpeta, copiar la ruta y mostrar en Finder.
@@ -74,6 +76,15 @@ max_content_results = 2000   # límite de líneas en la búsqueda por contenido
 
 [ui]
 theme = "dark"               # o "light"
+sidebar_side = "left"        # o "right": barra de actividad y sidebar a la derecha (Ajustes → Appearance)
+```
+
+Y en `keymap.toml`, los atajos cambiados (id de la acción → combinaciones; una lista vacía la deja sin atajo):
+
+```toml
+[bindings]
+show_git = ["cmd-g"]
+clear = []
 ```
 
 `GRIDTERM_CONFIG_DIR` sustituye a `~/.config/gridterm` (lo usan las pruebas). `GRIDTERM_IDE_LOCK_DIR` sustituye a `~/.claude/ide` para el `.lock` de la integración con Claude Code (las pruebas lo aíslan así).
@@ -142,7 +153,7 @@ La configuración global de los agentes (`~/.claude.json`, `~/.omp/agent/mcp.jso
 - El Explorer relee las carpetas cargadas que cambian en disco.
 - El índice de File Search se reindexa al crear, borrar o renombrar archivos.
 
-**Git.** Clic en un archivo despliega su diff: cada hunk tiene su botón de Stage/Unstage, y se pueden seleccionar líneas sueltas para aplicar solo esas, como `git add -p` o GitKraken. El botón ⤢ de la cabecera History abre el historial en una ventana flotante grande, con la ruta del repositorio, la rama y la celda a la que pertenece (número, fila y columna, con un minimapa del grid); Esc, ✕ o un clic fuera la cierran. Un clic en un commit del historial del panel abre la ventana con ese commit desplegado; dentro de la ventana, un clic en un commit lo despliega o lo pliega: arriba, una banda con el sha completo, los padres, autor y fecha, el mensaje entero y el enlace al commit en el remoto (GitHub, GitLab, Bitbucket, Azure DevOps); debajo, los archivos del commit, cerrados (clic derecho en un archivo o en una línea de su diff: abrirlo tal como está hoy, en esa línea, mostrarlo en el Explorer o copiar su ruta): un clic muestra su diff contra el primer padre, y al hacer scroll su cabecera queda fija arriba (un clic en ella lo cierra). Los diffs (también los del panel) tienen resaltado de sintaxis, calculado sobre el archivo entero de cada lado para acertar aunque el hunk empiece dentro de un comentario o un string. El botón ▾ junto a Commit abre Undo last commit (`git reset --soft HEAD~1`, solo commits sin push), Pull, Push y Refresh, con los commits pendientes de cada lado. Push y pull muestran el progreso de git en vivo y se pueden cancelar. Si la rama no tiene upstream, se pide confirmación antes de `push --set-upstream`. Los errores se resumen en un mensaje accionable, por ejemplo: "Push rejected: … Pull first, then push again.".
+**Git.** Clic en un archivo despliega su diff: cada hunk tiene su botón de Stage/Unstage, y se pueden seleccionar líneas sueltas para aplicar solo esas, como `git add -p` o GitKraken. El botón ⤢ de la cabecera History abre el historial en una ventana flotante grande, con la ruta del repositorio, la rama y la celda a la que pertenece (número, fila y columna, con un minimapa del grid); Esc, ✕ o un clic fuera la cierran. Un clic en un commit del historial del panel abre la ventana con ese commit desplegado; dentro de la ventana, un clic en un commit lo despliega o lo pliega: arriba, una banda con el sha completo, los padres, autor y fecha, el mensaje entero y el enlace al commit en el remoto (GitHub, GitLab, Bitbucket, Azure DevOps); debajo, los archivos del commit, cerrados (clic derecho en un archivo o en una línea de su diff: abrirlo tal como está hoy, en esa línea, mostrarlo en el Explorer o copiar su ruta): un clic muestra su diff contra el primer padre, y al hacer scroll su cabecera queda fija arriba (un clic en ella lo cierra). Los diffs (también los del panel) tienen resaltado de sintaxis, calculado sobre el archivo entero de cada lado para acertar aunque el hunk empiece dentro de un comentario o un string. El botón ▾ junto a Commit abre Undo last commit (`git reset --soft HEAD~1`, solo commits sin push), Pull, Push y Refresh, con los commits pendientes de cada lado. Push y pull muestran el progreso de git en vivo y se pueden cancelar. Si git se queda esperando a Git Credential Manager (por ejemplo, para elegir cuenta cuando hay varias para el mismo host), el panel lo avisa: GCM pregunta en su propia ventana, que puede quedar detrás de gridterm. Si la rama no tiene upstream, se pide confirmación antes de `push --set-upstream`. Los errores se resumen en un mensaje accionable, por ejemplo: "Push rejected: … Pull first, then push again.".
 
 **Performance.**
 - El fork de la shell se hace fuera del hilo de UI.
