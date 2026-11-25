@@ -272,6 +272,14 @@ fn load(
     };
 
     let mut total = 0usize;
+    read_patch(&patch, &mut result, max_lines, &mut total)?;
+    Ok((result, sides))
+}
+
+/// Reads the hunks of `patch` into `result`, up to `max_lines` lines in all
+/// (`total` counts them across calls). Content that is not UTF-8 makes the
+/// file binary (no hunks).
+pub(crate) fn read_patch(patch: &Patch, result: &mut FileDiff, max_lines: usize, total: &mut usize) -> Result<()> {
     'hunks: for hunk_idx in 0..patch.num_hunks() {
         let (raw, line_count) = patch.hunk(hunk_idx)?;
         let mut hunk = Hunk {
@@ -294,7 +302,7 @@ fn load(
                 // content instead.
                 _ => continue,
             };
-            if total == max_lines {
+            if *total >= max_lines {
                 result.truncated = true;
                 if !hunk.lines.is_empty() {
                     result.hunks.push(hunk);
@@ -310,7 +318,7 @@ fn load(
                 result.binary = true;
                 result.hunks.clear();
                 result.truncated = false;
-                return Ok((result, sides));
+                return Ok(());
             };
             hunk.lines.push(DiffLine {
                 kind,
@@ -319,11 +327,11 @@ fn load(
                 text: text.to_owned(),
                 no_newline_at_eof,
             });
-            total += 1;
+            *total += 1;
         }
         result.hunks.push(hunk);
     }
-    Ok((result, sides))
+    Ok(())
 }
 
 /// The hunk's lines with their patch prefix after applying the selection.

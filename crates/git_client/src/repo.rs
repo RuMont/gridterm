@@ -435,7 +435,7 @@ impl GitRepo {
 }
 
 /// `origin`, or the first configured remote.
-fn default_remote(repo: &Repository) -> Result<Option<String>> {
+pub(crate) fn default_remote(repo: &Repository) -> Result<Option<String>> {
     let remotes = repo.remotes()?;
     let remotes: Vec<&str> = remotes.iter().filter_map(|r| r.ok().flatten()).collect();
     Ok(remotes
