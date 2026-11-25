@@ -1706,6 +1706,70 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         result
     });
 
+    case!(r, "GH4", "Diffs con resaltado de sintaxis (ventana del historial y panel), leyendo el archivo entero", {
+        use crate::panels::git::HRow;
+        let git = |args: &[&str]| Command::new("git").args(args).current_dir(&repo).output().map(|o| o.status.success()).unwrap_or(false);
+        // The hunk starts inside a block comment opened 10 lines above.
+        let mut code = String::from("/* a long comment\n");
+        for n in 0..10 {
+            code.push_str(&format!("   still comment {n}\n"));
+        }
+        code.push_str("   end */\nfn main() { let s = \"text\"; }\n");
+        write(&repo.join("hl.rs"), &code);
+        ensure!(git(&["add", "hl.rs"]) && git(&["commit", "-q", "-m", "highlight me"]), "cannot commit");
+        let sha = r.wait_until(5000, |ws, cx| ws.git.read(cx).log.first().is_some_and(|c| c.summary == "highlight me")).await
+            .and_then(|_| r.read(|ws, cx| ws.git.read(cx).log.first().map(|c| c.sha.clone())))
+            .ok_or("commit not in the log")?;
+        let result: Result<String, String> = async {
+            r.with({
+                let sha = sha.clone();
+                move |ws, _, cx| ws.git.update(cx, |g, cx| g.open_history_at(sha, cx))
+            });
+            r.wait_until(3000, |ws, cx| matches!(ws.git.read(cx).commit_details, Some(Ok(_)))).await.ok_or("details not loaded")?;
+            r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.toggle_commit_file(0, cx)));
+            r.wait_until(3000, |ws, cx| ws.git.read(cx).commit_highlights.contains_key(&0)).await.ok_or("commit file not highlighted")?;
+            r.next_frame().await;
+            r.next_frame().await;
+            r.shot("GH4-history-highlight");
+            let names = r.read(|ws, cx| {
+                let g = ws.git.read(cx);
+                let (Some(Ok(d)), Some(h)) = (&g.commit_details, g.commit_highlights.get(&0)) else { return Vec::new() };
+                g.history_rows.iter().filter_map(|row| match row {
+                    HRow::Line(f, hk, l) => d.files.get(*f)?.diff.hunks.get(*hk)?.lines.get(*l),
+                    _ => None,
+                }).map(|line| (line.text.clone(), h.for_line(line).iter().map(|(_, n)| *n).collect::<Vec<_>>())).collect::<Vec<_>>()
+            });
+            let of = |needle: &str| names.iter().find(|(t, _)| t.contains(needle)).map(|(_, n)| n.clone()).unwrap_or_default();
+            ensure!(of("still comment 9").contains(&"comment"), "comment line: {:?}", of("still comment 9"));
+            ensure!(of("let s").contains(&"string"), "string line: {:?}", of("let s"));
+            r.key("escape");
+            // The panel's diff of a working-tree change, highlighted too.
+            write(&repo.join("hl.rs"), &code.replace("\"text\"", "\"changed\""));
+            let change = r.wait_until(5000, |ws, cx| ws.git.read(cx).status.as_ref().is_some_and(|s| s.unstaged.iter().any(|c| c.path == Path::new("hl.rs")))).await
+                .and_then(|_| r.read(|ws, cx| ws.git.read(cx).status.as_ref()?.unstaged.iter().find(|c| c.path == Path::new("hl.rs")).cloned()))
+                .ok_or("change not listed")?;
+            r.with(move |ws, _, cx| ws.git.update(cx, |g, cx| g.toggle_expand(&change, false, cx)));
+            r.wait_until(3000, |ws, cx| ws.git.read(cx).expanded.as_ref().is_some_and(|e| e.highlights.is_some())).await.ok_or("panel diff not highlighted")?;
+            r.next_frame().await;
+            r.shot("GH4-panel-highlight");
+            let added = r.read(|ws, cx| {
+                let e = ws.git.read(cx).expanded.as_ref()?;
+                let line = e.diff.as_ref()?.hunks.iter().flat_map(|h| &h.lines).find(|l| l.text.contains("changed"))?;
+                Some(e.highlights.as_ref()?.for_line(line).iter().map(|(_, n)| *n).collect::<Vec<_>>())
+            }).unwrap_or_default();
+            ensure!(added.contains(&"string"), "panel added line: {added:?}");
+            Ok("comentario y string resaltados en ambos".into())
+        }
+        .await;
+        if r.read(|ws, _| ws.history_open) {
+            r.key("escape");
+        }
+        git(&["checkout", "-q", "--", "hl.rs"]);
+        git(&["reset", "-q", "--hard", "HEAD~1"]);
+        r.wait_until(5000, |ws, cx| ws.git.read(cx).log.first().is_some_and(|c| c.summary != "highlight me")).await;
+        result
+    });
+
     case!(r, "Gi5", "Revertir un commit pusheado (confirmación + push)", {
         let target = r.read(|ws, cx| ws.git.read(cx).log.iter().find(|c| c.on_head).cloned()).ok_or("empty log")?;
         r.with({

@@ -25,6 +25,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{split_name, PanelEvent};
+use crate::diff_highlight::{styled_line, DiffHighlights, MAX_HIGHLIGHT_BYTES};
 use crate::theme;
 use crate::ui::{empty_state, icon_button, section_header, text_button};
 
@@ -45,6 +46,8 @@ pub(crate) struct ExpandedDiff {
     pub(crate) error: Option<String>,
     /// Selected changed lines: (hunk index, line index).
     pub(crate) selected: BTreeSet<(usize, usize)>,
+    /// Syntax highlighting of the diff's lines (read with the diff).
+    pub(crate) highlights: Option<Arc<DiffHighlights>>,
 }
 
 /// Result of a git operation, reported back on the UI thread.
@@ -165,6 +168,10 @@ pub struct GitPanel {
     pub(crate) history_rows: Vec<HRow>,
     /// Files of the unfolded commit whose diff is shown (all start closed).
     pub(crate) open_files: BTreeSet<usize>,
+    /// Syntax highlighting of the unfolded commit's files, read when a file
+    /// is first opened.
+    pub(crate) commit_highlights: HashMap<usize, Arc<DiffHighlights>>,
+    highlight_tasks: HashMap<usize, Task<()>>,
     /// Painted file headers (by file) and the sticky header (e2e).
     pub(crate) file_header_bounds: std::rc::Rc<std::cell::RefCell<HashMap<usize, Bounds<Pixels>>>>,
     pub(crate) sticky_bounds: StickyProbe,
@@ -242,6 +249,8 @@ impl GitPanel {
             details_task: None,
             history_rows: Vec::new(),
             open_files: BTreeSet::new(),
+            commit_highlights: HashMap::new(),
+            highlight_tasks: HashMap::new(),
             file_header_bounds: Default::default(),
             sticky_bounds: Default::default(),
             refresh_task: None,
@@ -352,6 +361,8 @@ impl GitPanel {
         }
         self.open_commit = sha.clone();
         self.open_files.clear();
+        self.commit_highlights.clear();
+        self.highlight_tasks.clear();
         self.commit_details = None;
         self.details_task = None;
         if let (Some(sha), Some(repo)) = (sha, self.repo.clone()) {
@@ -380,6 +391,7 @@ impl GitPanel {
         let stuck = self.sticky_file().is_some_and(|(sf, _)| sf == f);
         if !self.open_files.remove(&f) {
             self.open_files.insert(f);
+            self.highlight_commit_file(f, cx);
         }
         self.rebuild_history_rows();
         if stuck {
@@ -388,6 +400,38 @@ impl GitPanel {
             }
         }
         cx.notify();
+    }
+
+    /// Reads both sides of file `f` of the unfolded commit and highlights
+    /// them, off the UI thread (once per file).
+    fn highlight_commit_file(&mut self, f: usize, cx: &mut Context<Self>) {
+        if self.commit_highlights.contains_key(&f) || self.highlight_tasks.contains_key(&f) {
+            return;
+        }
+        let Some(Ok(details)) = &self.commit_details else { return };
+        let (Some(file), Some(repo)) = (details.files.get(f), self.repo.clone()) else { return };
+        if file.diff.binary || file.diff.hunks.is_empty() {
+            return;
+        }
+        let (sha, path, old_path) = (details.sha.clone(), file.diff.path.clone(), file.old_path.clone());
+        let work = cx.background_spawn(async move {
+            let (old, new) = repo.commit_texts(&sha, &path, old_path.as_deref(), MAX_HIGHLIGHT_BYTES).ok()?;
+            Some(Arc::new(DiffHighlights::compute(&path, old.as_deref(), new.as_deref())))
+        });
+        let commit = details.sha.clone();
+        self.highlight_tasks.insert(f, cx.spawn(async move |this, cx| {
+            let highlights = work.await;
+            let _ = this.update(cx, |p, cx| {
+                if p.open_commit.as_deref() != Some(commit.as_str()) {
+                    return;
+                }
+                p.highlight_tasks.remove(&f);
+                if let Some(h) = highlights {
+                    p.commit_highlights.insert(f, h);
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     /// The open file whose header has scrolled out of the top of the
@@ -666,7 +710,7 @@ impl GitPanel {
         if self.expanded.as_ref().is_some_and(|e| e.path == change.path && e.staged == staged) {
             self.expanded = None;
         } else {
-            self.expanded = Some(ExpandedDiff { path: change.path.clone(), staged, diff: None, error: None, selected: BTreeSet::new() });
+            self.expanded = Some(ExpandedDiff { path: change.path.clone(), staged, diff: None, error: None, selected: BTreeSet::new(), highlights: None });
             self.load_diff(cx);
         }
         self.rebuild_rows();
@@ -677,15 +721,24 @@ impl GitPanel {
         let (Some(repo), Some(exp)) = (self.repo.clone(), self.expanded.as_ref()) else { return };
         let (path, staged) = (exp.path.clone(), exp.staged);
         let side = if staged { DiffSide::Staged } else { DiffSide::Unstaged };
-        let work = cx.background_spawn(async move { repo.diff_file(&path, side, 3, MAX_DIFF_LINES) });
+        // The diff, then both sides of the file whole for its highlighting.
+        let work = cx.background_spawn(async move {
+            let diff = repo.diff_file(&path, side, 3, MAX_DIFF_LINES)?;
+            let highlights = (!diff.binary && !diff.hunks.is_empty())
+                .then(|| repo.diff_texts(&path, side, MAX_HIGHLIGHT_BYTES).ok())
+                .flatten()
+                .map(|(old, new)| Arc::new(DiffHighlights::compute(&path, old.as_deref(), new.as_deref())));
+            anyhow::Ok((diff, highlights))
+        });
         let (path, staged) = (exp.path.clone(), exp.staged);
         self.diff_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |p, cx| {
                 let Some(exp) = p.expanded.as_mut().filter(|e| e.path == path && e.staged == staged) else { return };
                 match result {
-                    Ok(d) => {
+                    Ok((d, highlights)) => {
                         exp.diff = Some(d);
+                        exp.highlights = highlights;
                         exp.error = None;
                     }
                     Err(e) => exp.error = Some(git_client::friendly_message(&e)),
@@ -1127,7 +1180,7 @@ impl GitPanel {
                     .child(div().w(px(30.)).flex_none().text_right().text_color(rgb(theme::overlay0())).child(num(l.old_lineno)))
                     .child(div().w(px(30.)).flex_none().text_right().text_color(rgb(theme::overlay0())).child(num(l.new_lineno)))
                     .child(div().w(px(10.)).flex_none().text_color(rgb(fg)).child(sign))
-                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(fg)).child(l.text.trim_end_matches('\r').replace('\t', "    ")))
+                    .child(diff_text(l, exp.highlights.as_deref(), fg, cx))
                     .into_any_element()
             }
             Row::More(n) => row_base(("git-more", ix).into()).text_color(rgb(theme::overlay0())).child(format!("… {n} more")).into_any_element(),
@@ -1488,7 +1541,7 @@ impl GitPanel {
                     .child(div().w(px(40.)).flex_none().text_right().text_color(rgb(theme::overlay0())).child(num(line.old_lineno)))
                     .child(div().w(px(40.)).flex_none().text_right().text_color(rgb(theme::overlay0())).child(num(line.new_lineno)))
                     .child(div().w(px(12.)).flex_none().text_color(rgb(fg)).child(sign))
-                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(fg)).child(line.text.trim_end_matches('\r').replace('\t', "    ")))
+                    .child(diff_text(line, self.commit_highlights.get(&f).map(|h| &**h), fg, cx))
                     .into_any_element()
             }
             HRow::Note(text) => band(("history-note", ix).into()).child(div().italic().text_color(rgb(theme::overlay0())).child(text)).into_any_element(),
@@ -1538,6 +1591,16 @@ impl GitPanel {
             .child(div().flex_none().text_color(rgb(theme::green())).child(format!("+{}", file.added)))
             .child(div().flex_none().text_color(rgb(theme::red())).child(format!("−{}", file.removed)))
             .into_any_element()
+    }
+}
+
+/// The text of a diff line: syntax-coloured when its file is highlighted
+/// (the line's background says added/removed), else in `fg`.
+fn diff_text(line: &git_client::DiffLine, highlights: Option<&DiffHighlights>, fg: u32, cx: &App) -> Div {
+    let el = div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap();
+    match highlights {
+        Some(h) => el.text_color(rgb(theme::text())).child(styled_line(&line.text, h.for_line(line), cx)),
+        None => el.text_color(rgb(fg)).child(line.text.trim_end_matches('\r').replace('\t', "    ")),
     }
 }
 

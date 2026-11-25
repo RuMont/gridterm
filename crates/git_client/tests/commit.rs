@@ -66,6 +66,23 @@ fn commit_details_diff_against_first_parent() {
     let r = by_path("renamed.txt");
     assert_eq!((r.status, r.old_path.as_deref()), ('R', Some(Path::new("old.txt"))));
 
+    // Full texts of both sides, for highlighting (renamed: the old path).
+    let (old, new) = repo.commit_texts(&head, Path::new("a.txt"), None, 1 << 20).unwrap();
+    assert_eq!((old.as_deref(), new.as_deref()), (Some("one\ntwo\nthree\n"), Some("one\nTWO\nthree\n")));
+    let (old, new) = repo.commit_texts(&head, Path::new("renamed.txt"), Some(Path::new("old.txt")), 1 << 20).unwrap();
+    assert!(old.is_some() && old == new, "rename sides {old:?} {new:?}");
+    assert_eq!(repo.commit_texts(&head, Path::new("new.txt"), None, 1 << 20).unwrap().0, None, "an added file has no old side");
+    assert_eq!(repo.commit_texts(&head, Path::new("a.txt"), None, 4).unwrap(), (None, None), "over the byte limit");
+    // Working tree and index sides.
+    fs::write(d.join("a.txt"), "one\nTWO\nthree\nfour\n").unwrap();
+    let (old, new) = repo.diff_texts(Path::new("a.txt"), git_client::DiffSide::Unstaged, 1 << 20).unwrap();
+    assert_eq!((old.as_deref(), new.as_deref()), (Some("one\nTWO\nthree\n"), Some("one\nTWO\nthree\nfour\n")));
+    git(d, &["add", "a.txt"]);
+    let (old, new) = repo.diff_texts(Path::new("a.txt"), git_client::DiffSide::Staged, 1 << 20).unwrap();
+    assert_eq!((old.as_deref(), new.as_deref()), (Some("one\nTWO\nthree\n"), Some("one\nTWO\nthree\nfour\n")));
+    git(d, &["reset", "-q", "a.txt"]);
+    fs::write(d.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+
     // A root commit diffs against the empty tree; a local remote has no page.
     git(d, &["remote", "set-url", "origin", "/tmp/elsewhere.git"]);
     let first = repo.commit_details(&root, 3, 10_000).unwrap();

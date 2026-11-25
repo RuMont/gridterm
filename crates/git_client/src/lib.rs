@@ -11,6 +11,7 @@ mod error;
 pub mod graph;
 mod repo;
 mod status;
+mod texts;
 mod watcher;
 
 use std::path::{Component, Path, PathBuf};
@@ -19,6 +20,7 @@ pub use commit::{commit_web_url, CommitDetails, CommitFile};
 pub use diff::{DiffLine, DiffSide, FileDiff, Hunk, LineKind};
 pub use error::{error_kind, friendly_message, GitErrorKind};
 pub use repo::{GitRepo, UpstreamPolicy};
+pub use texts::SideTexts;
 pub use watcher::RepoWatcher;
 
 /// Returns the working-directory root of the repository containing `path`,

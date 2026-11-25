@@ -1,6 +1,7 @@
 mod actions;
 mod cell;
 mod definition;
+mod diff_highlight;
 mod highlight;
 mod panels;
 mod session;
