@@ -57,7 +57,7 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | Esc (en el sidebar) | Volver a la terminal activa |
 | Tab / ⇧Tab (en el sidebar) | Recorrer sus controles; no salta a las celdas (en una terminal van al programa: ⇧Tab cambia de modo en Claude Code) |
 | ⌘C / ⌘V / ⌘K | Copiar selección / pegar / limpiar (en una terminal). Con solo una imagen en el portapapeles, ⌘V envía ctrl+V al programa en primer plano (así Claude Code pega la imagen); en la shell no hace nada |
-| Arrastrar, doble o triple clic | Seleccionar texto, también dentro de programas que solo reciben clics (Claude Code). En los que siguen el arrastre (vim con `mouse=a`, tmux), con ⇧ |
+| Arrastrar, doble o triple clic | Seleccionar texto, también dentro de programas que solo reciben clics. Los que siguen el ratón (Claude Code a pantalla completa, vim con `mouse=a`, tmux) reciben el arrastre y seleccionan ellos: Claude Code resalta y copia al soltar (OSC 52). Con ⇧, selecciona gridterm |
 | ⇧PgUp / ⇧PgDn, ⌘Home / ⌘End | Scroll del historial |
 
 Todos estos atajos (salvo Esc, Tab y ⌘Q) se pueden cambiar en Ajustes → Keyboard shortcuts…: clic en el atajo de una acción y pulsar la combinación nueva (necesita ⌘, ⌃ o ⌥, o una tecla F; Esc cancela). Si otra acción del mismo ámbito ya la tenía, se le quita y se avisa. Los cambios se aplican al momento y se guardan en `~/.config/gridterm/keymap.toml` (solo lo que difiere de los atajos por defecto; ↺ devuelve una acción a su atajo por defecto y Reset all, todas). Los tooltips muestran el atajo vigente.

@@ -140,6 +140,8 @@ pub struct TerminalView {
     exited: bool,
     scroll_acc: f32,
     selecting: bool,
+    /// Cell of the last motion report sent to the program (one per cell).
+    last_motion_cell: Option<GridPoint>,
     created_at: std::time::Instant,
     first_output: bool,
     render_count: u64,
@@ -269,6 +271,7 @@ impl TerminalView {
             exited: false,
             scroll_acc: 0.0,
             selecting: false,
+            last_motion_cell: None,
             created_at: std::time::Instant::now(),
             first_output: false,
             render_count: 0,
@@ -777,9 +780,10 @@ impl TerminalView {
         Some((GridPoint::new(Line(row as i32 - offset), Column(col)), side))
     }
 
-    /// The program asked for drag or motion reports (`?1002h`/`?1003h`).
-    /// Programs that only take clicks (`?1000h`, e.g. Claude Code) never see
-    /// a drag, so a drag there selects text locally.
+    /// The program asked for drag or motion reports (`?1002h`/`?1003h`): it
+    /// gets the drag and handles it (Claude Code selects and copies through
+    /// OSC 52; ⇧ still selects locally). Programs that only take clicks
+    /// (`?1000h`) never see a drag, so a drag there selects text locally.
     fn reports_drags(&self) -> bool {
         self.term.lock().mode().intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
     }
@@ -899,6 +903,7 @@ impl TerminalView {
         if self.mouse_mode(event.modifiers.shift) {
             self.send_mouse_report(0, true, event.position, event.modifiers);
             if self.reports_drags() {
+                self.last_motion_cell = self.grid_point(event.position).map(|(p, _)| p);
                 return;
             }
             // Click-only reporting: the program got the click; a drag (or a
@@ -919,6 +924,10 @@ impl TerminalView {
         self.last_mouse = Some(event.position);
         let link = if event.modifiers.platform && event.pressed_button.is_none() { self.link_at(event.position) } else { None };
         self.set_hovered_link(link, cx);
+        if !self.selecting && self.mouse_mode(event.modifiers.shift) && self.reports_drags() {
+            self.report_motion(event);
+            return;
+        }
         if !self.selecting || event.pressed_button != Some(MouseButton::Left) {
             return;
         }
@@ -928,6 +937,23 @@ impl TerminalView {
             }
             cx.notify();
         }
+    }
+
+    /// Motion for a program that follows the mouse: with the left button
+    /// held (drag, `?1002h`), or any motion when it asked for all of it
+    /// (`?1003h`). One report per cell, as xterm does.
+    fn report_motion(&mut self, event: &MouseMoveEvent) {
+        let held = event.pressed_button == Some(MouseButton::Left);
+        if !held && !self.term.lock().mode().contains(TermMode::MOUSE_MOTION) {
+            return;
+        }
+        let cell = self.grid_point(event.position).map(|(p, _)| p);
+        if cell.is_none() || cell == self.last_motion_cell {
+            return;
+        }
+        self.last_motion_cell = cell;
+        // 32 = motion; + 0 left button held, + 3 no button.
+        self.send_mouse_report(if held { 32 } else { 35 }, true, event.position, event.modifiers);
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {

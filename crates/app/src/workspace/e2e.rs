@@ -1652,6 +1652,36 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok("el programa recibió 0x16".into())
     });
 
+    case!(r, "CC4", "Con un programa que sigue el ratón (Claude Code a pantalla completa: ?1002h/?1003h), el arrastre y el movimiento le llegan", {
+        r.key("cmd-1");
+        let shell = |r: &mut Runner<'_>, cmd: &'static str| r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)));
+        // The tty echoes what the program receives (^[[<…M).
+        shell(r, "clear; printf 'DRAG_FROM here DRAG_TO\\n\\033[?1002h\\033[?1003h\\033[?1006h'; cat > /dev/null\r");
+        r.sleep(500).await;
+        let from = r.find_in_terminal(0, "DRAG_FROM").ok_or("text not on screen")?;
+        let to = r.find_in_terminal(0, "DRAG_TO").ok_or("text not on screen")?;
+        let none = Modifiers::default();
+        // Hover first (no button): reported as motion only under ?1003h.
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: point(from.x, from.y + px(30.)), pressed_button: None, modifiers: none }));
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: from, pressed_button: None, modifiers: none }));
+        r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: from, modifiers: none, click_count: 1, first_mouse: false }));
+        let mid = point((from.x + to.x) / 2., from.y);
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: mid, pressed_button: Some(MouseButton::Left), modifiers: none }));
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: to, pressed_button: Some(MouseButton::Left), modifiers: none }));
+        r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: to, modifiers: none, click_count: 1 }));
+        r.sleep(300).await;
+        let sel = r.read(|ws, cx| ws.terminals[0].read(cx).selection_text());
+        let screen = r.term_text(0).replace('\n', "");
+        shell(r, "\x03");
+        r.sleep(200).await;
+        shell(r, "printf '\\033[?1002l\\033[?1003l\\033[?1006l'; clear\r");
+        r.sleep(300).await;
+        ensure!(screen.contains("[<0;") && screen.contains("[<32;"), "no press + drag report reached the program:\n{screen}");
+        ensure!(screen.contains("[<35;"), "no hover report under ?1003h:\n{screen}");
+        ensure!(sel.is_none(), "gridterm selected {sel:?} although the program handles the drag");
+        Ok("pulsar, arrastrar (32), mover (35) y soltar llegan al programa".into())
+    });
+
     case!(r, "CC3", "Tab y ⇧Tab llegan al programa (modos de Claude Code) y no mueven el foco", {
         r.key("cmd-1");
         r.run("clear; stty raw -echo; head -c 4 | od -An -tx1; stty sane");
