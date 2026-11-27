@@ -88,8 +88,8 @@ pub fn find(file: &Path, text: &str, offset: usize) -> Option<Target> {
     let lang = lang_of(file);
 
     let via_import = match lang {
-        Lang::Ts => ts_via_import(file, text, range.clone()),
-        Lang::Rust => rust_via_import(file, text, range.clone()),
+        Lang::Ts => ts_via_import(file, text, range),
+        Lang::Rust => rust_via_import(file, text, range),
         Lang::Other => None,
     };
     if via_import.is_some() {
@@ -219,7 +219,7 @@ fn ts_imports(text: &str) -> HashMap<String, TsImport> {
                 },
             );
         }
-        for (name, local) in braces.map(ts_specifiers).unwrap_or_default() {
+        for (name, local) in braces.map_or_default(ts_specifiers) {
             out.insert(
                 local,
                 TsImport {
@@ -716,7 +716,7 @@ fn workspace_crate(file: &Path, name: &str) -> Option<PathBuf> {
     static CRATE_NAME: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"(?m)^\s*name\s*=\s*"([^"]+)""#).expect("static regex is valid"));
     let name_re = &*CRATE_NAME;
-    let mut dirs = vec![root.clone()];
+    let mut dirs = vec![root];
     for depth in 0..2 {
         let mut next = Vec::new();
         for d in &dirs {

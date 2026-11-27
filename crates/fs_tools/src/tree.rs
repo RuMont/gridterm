@@ -76,7 +76,7 @@ pub fn read_dir(dir: &Path, opts: TreeOptions) -> io::Result<Vec<DirEntryInfo>> 
             .into_iter()
             .collect();
         for e in &mut entries {
-            let file_name = e.path.file_name().map(|n| n.to_os_string());
+            let file_name = e.path.file_name().map(std::ffi::OsStr::to_os_string);
             e.is_ignored_or_hidden = file_name.is_none_or(|n| !visible.contains(&n));
         }
     }

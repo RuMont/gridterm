@@ -482,9 +482,7 @@ impl Workspace {
             Err(e) => return log::warn!("agent MCP unavailable: cannot write {}: {e:#}", dir.display()),
         };
         // GRIDTERM_SOCKET_DIR keeps tests apart from the user's instance.
-        let socket_dir = std::env::var_os("GRIDTERM_SOCKET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+        let socket_dir = std::env::var_os("GRIDTERM_SOCKET_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
         let path = agents::socket::socket_path(&socket_dir, std::process::id());
         agents::socket::remove_stale(&path);
         match agents::socket::AgentSocket::start(&path) {
@@ -599,7 +597,7 @@ impl Workspace {
             agents::ide::IdeEvent::Anonymous { conn, peer_port } => {
                 // No token, no self-identification (opencode): ask the system
                 // which process in a cell holds the connection.
-                let Some(server_port) = self.ide.as_ref().map(|i| i.port()) else {
+                let Some(server_port) = self.ide.as_ref().map(agents::ide::IdeServer::port) else {
                     return;
                 };
                 // (cell's parent id, shell) for every terminal of every cell.
@@ -860,7 +858,7 @@ impl Workspace {
             match &mut self.picker {
                 PickerStub::Auto => {
                     if let Some(active) = self.active_terminal(cx) {
-                        active.update(cx, |t, cx| t.refresh_process_info(cx));
+                        active.update(cx, terminal::TerminalView::refresh_process_info);
                     }
                     let dir = self
                         .active_terminal(cx)
@@ -988,7 +986,7 @@ impl Workspace {
     fn close_terminal(&mut self, _: &CloseTerminal, window: &mut Window, cx: &mut Context<Self>) {
         let Some(i) = self.active else { return };
         let cell = self.cells[i].clone();
-        if cell.update(cx, |c, cx| c.close_visible_tab(cx)) {
+        if cell.update(cx, super::cell::CellView::close_visible_tab) {
             crate::cell::focus_cell(&cell, window, cx);
             return;
         }
@@ -1103,7 +1101,7 @@ impl Workspace {
             Some(dir) => Some(dir),
             None => {
                 let current = cell.read(cx).current_terminal().clone();
-                current.update(cx, |t, cx| t.refresh_process_info(cx));
+                current.update(cx, terminal::TerminalView::refresh_process_info);
                 current.read(cx).cwd().cloned()
             }
         };
@@ -1157,8 +1155,7 @@ impl Workspace {
                     if self.terminals.is_empty() {
                         let dir = file
                             .parent()
-                            .map(std::path::Path::to_path_buf)
-                            .unwrap_or_else(|| PathBuf::from("/"));
+                            .map_or_else(|| PathBuf::from("/"), std::path::Path::to_path_buf);
                         self.open_external_terminal(dir, None, window, cx);
                     }
                     if let Some(i) = self.active {
@@ -1295,7 +1292,7 @@ impl Workspace {
     /// What runs in every terminal (cell frames and tab dots).
     fn poll_busy(&mut self, cx: &mut Context<Self>) {
         for t in self.all_terminals(cx) {
-            t.update(cx, |t, cx| t.refresh_activity(cx));
+            t.update(cx, terminal::TerminalView::refresh_activity);
         }
     }
 
@@ -1303,7 +1300,7 @@ impl Workspace {
     /// inactive terminals refresh their header when they produce output.
     fn poll_active_terminal(&mut self, cx: &mut Context<Self>) {
         let Some(view) = self.active_terminal(cx) else { return };
-        if view.update(cx, |t, cx| t.refresh_process_info(cx)) {
+        if view.update(cx, terminal::TerminalView::refresh_process_info) {
             self.update_context(cx);
         }
     }
@@ -1411,9 +1408,9 @@ impl Workspace {
             match panel {
                 Panel::Search => self.search.update(cx, |s, cx| {
                     s.set_visible(true, cx);
-                    s.focus_input(window, cx)
+                    s.focus_input(window, cx);
                 }),
-                Panel::Git => self.git.update(cx, |g, cx| g.on_shown(cx)),
+                Panel::Git => self.git.update(cx, super::panels::git::GitPanel::on_shown),
                 _ => {}
             }
         }
@@ -1428,7 +1425,7 @@ impl Workspace {
             self.palette_open = true;
             self.search.update(cx, |s, cx| {
                 s.set_visible(true, cx);
-                s.focus_input(window, cx)
+                s.focus_input(window, cx);
             });
             cx.notify();
         }
@@ -1517,8 +1514,7 @@ impl Workspace {
         let HistoryLocation { repo, branch, cell } = self.history_location(cx);
         let path = repo
             .as_deref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "No repository".into());
+            .map_or_else(|| "No repository".into(), |p| p.display().to_string());
         let layout = compute_layout(self.terminals.len(), self.grid_spec());
         let position = match cell {
             Some(c) => format!(
@@ -1660,12 +1656,7 @@ impl Workspace {
     }
 
     fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let location = self
-            .context
-            .root
-            .as_deref()
-            .map(terminal::display_path)
-            .unwrap_or_default();
+        let location = self.context.root.as_deref().map_or_default(terminal::display_path);
         div()
             .id("palette-backdrop")
             .absolute()
@@ -1777,7 +1768,7 @@ impl Workspace {
                 for cell in self.cells.clone() {
                     let viewers: Vec<_> = cell.read(cx).tabs().iter().map(|t| t.viewer.clone()).collect();
                     for v in viewers {
-                        v.update(cx, |v, cx| v.refresh_git_marks(cx));
+                        v.update(cx, super::viewer::FileViewer::refresh_git_marks);
                     }
                 }
                 return;
@@ -1802,8 +1793,7 @@ impl Workspace {
         use crate::keymap_editor::{KeymapEditor, KeymapEditorEvent};
         let keymap = cx
             .try_global::<crate::actions::CurrentKeymap>()
-            .map(|k| k.0.clone())
-            .unwrap_or_default();
+            .map_or_default(|k| k.0.clone());
         let editor = cx.new(|cx| KeymapEditor::new(keymap, cx));
         self.keymap_sub =
             Some(cx.subscribe_in(
@@ -2011,8 +2001,7 @@ impl Workspace {
         let location = ctx
             .root
             .as_deref()
-            .map(terminal::display_path)
-            .unwrap_or_else(|| "no context".into());
+            .map_or_else(|| "no context".into(), terminal::display_path);
         let terminal_label = ctx.terminal_id.map(|id| format!("T{id}"));
         let branch = self.git.read(cx).branch_label();
         div()
@@ -2365,7 +2354,7 @@ impl Workspace {
                     }))
                     .child(div().flex().flex_col().gap_1().children(pending.doomed.iter().map(|d| {
                         let busy = !d.processes.is_empty();
-                        let location = d.cwd.as_deref().map(terminal::display_path).unwrap_or_default();
+                        let location = d.cwd.as_deref().map_or_default(terminal::display_path);
                         div()
                             .flex()
                             .flex_col()
@@ -2423,7 +2412,6 @@ impl Workspace {
                                     .on_click(cx.listener(|this, _: &ClickEvent, w, cx| this.cancel_shrink(w, cx)))
                             })
                             .child({
-                                let buttons = buttons.clone();
                                 button(
                                     "shrink-confirm",
                                     if n == 1 { "Close terminal" } else { "Close terminals" },
@@ -2562,8 +2550,8 @@ impl Workspace {
                 el.child(div().text_color(rgb(theme::peach())).child("zoomed"))
             })
             .child(div().flex_1())
-            .when_some(process, |el, p| el.child(p))
-            .when_some(cwd, |el, c| el.child(c))
+            .when_some(process, gpui_kit::ParentElement::child)
+            .when_some(cwd, gpui_kit::ParentElement::child)
     }
 }
 
@@ -2586,10 +2574,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NextTab, w, cx| this.cycle_tab(true, w, cx)))
             .on_action(cx.listener(|this, _: &PrevTab, w, cx| this.cycle_tab(false, w, cx)))
             .on_action(cx.listener(|this, _: &crate::panels::git::ConfirmSetUpstream, w, cx| {
-                this.git.update(cx, |g, cx| g.confirm_set_upstream(w, cx))
+                this.git.update(cx, |g, cx| g.confirm_set_upstream(w, cx));
             }))
             .on_action(cx.listener(|this, _: &crate::panels::git::CancelOperation, _, cx| {
-                this.git.update(cx, |g, cx| g.cancel_operation(cx))
+                this.git.update(cx, super::panels::git::GitPanel::cancel_operation);
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
                 this.sidebar_visible = !this.sidebar_visible;
@@ -2643,15 +2631,15 @@ impl Render for Workspace {
                                 if phase == DispatchPhase::Capture {
                                     on_move.update(cx, |ws, cx| {
                                         if ws.resizing_sidebar.is_some() || ws.grid_drag.is_some() {
-                                            ws.drag_to(e.position, cx)
+                                            ws.drag_to(e.position, cx);
                                         }
                                     });
                                 }
                             });
-                            let on_up = this.clone();
+                            let on_up = this;
                             window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
                                 if phase == DispatchPhase::Capture {
-                                    on_up.update(cx, |ws, cx| ws.end_drags(cx));
+                                    on_up.update(cx, Workspace::end_drags);
                                 }
                             });
                         },
@@ -2666,7 +2654,7 @@ impl Render for Workspace {
             .when_some(self.pending_shrink.clone(), |el, p| {
                 el.child(self.render_shrink_dialog(&p, cx))
             })
-            .when_some(self.keymap_editor.clone(), |el, editor| el.child(editor))
+            .when_some(self.keymap_editor.clone(), gpui_kit::ParentElement::child)
             .child(self.render_toasts(cx))
     }
 }

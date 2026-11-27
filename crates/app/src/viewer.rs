@@ -319,10 +319,7 @@ impl FileViewer {
         let watch_task = cx.spawn_in(window, async move |this, cx| {
             use futures::StreamExt as _;
             while rx.next().await.is_some() {
-                if this
-                    .update_in(cx, |v, window, cx| v.reload_if_changed(window, cx))
-                    .is_err()
-                {
+                if this.update_in(cx, FileViewer::reload_if_changed).is_err() {
                     break;
                 }
             }

@@ -18,7 +18,7 @@ pub struct KeyInput<'a> {
 
 /// xterm modifier parameter: 1 + shift + 2*alt + 4*ctrl.
 fn modifier_param(k: &KeyInput) -> u8 {
-    1 + k.shift as u8 + 2 * k.alt as u8 + 4 * k.ctrl as u8
+    1 + u8::from(k.shift) + 2 * u8::from(k.alt) + 4 * u8::from(k.ctrl)
 }
 
 fn csi_or_ss3(k: &KeyInput, mode: TermMode, final_byte: char) -> Vec<u8> {

@@ -257,7 +257,7 @@ fn assign(keymap: &mut Keymap, id: &str, key: &str, os: OperatingSystem) -> Opti
             taken_from.push(other.label);
         }
     }
-    let defaults: Vec<String> = cmd.defaults.iter().map(|k| k.to_string()).collect();
+    let defaults: Vec<String> = cmd.defaults.iter().map(std::string::ToString::to_string).collect();
     if defaults.len() == 1 && same_key(&defaults[0], key, os) {
         keymap.bindings.remove(id);
     } else {
@@ -275,7 +275,7 @@ fn assign(keymap: &mut Keymap, id: &str, key: &str, os: OperatingSystem) -> Opti
 impl Render for KeymapEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let os = cx.platform_info().os;
-        let path = Keymap::path().map(|p| terminal::display_path(&p)).unwrap_or_default();
+        let path = Keymap::path().map_or_default(|p| terminal::display_path(&p));
         let mut list = div()
             .id("kbd-list")
             .flex()

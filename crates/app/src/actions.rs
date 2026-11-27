@@ -227,7 +227,7 @@ pub fn command(id: &str) -> Option<&'static Command> {
 pub fn keys_of(keymap: &config::Keymap, cmd: &Command) -> Vec<String> {
     match keymap.bindings.get(cmd.id) {
         Some(keys) => keys.clone(),
-        None => cmd.defaults.iter().map(|k| k.to_string()).collect(),
+        None => cmd.defaults.iter().map(std::string::ToString::to_string).collect(),
     }
 }
 
@@ -308,7 +308,7 @@ pub fn display_key(key: &str, os: OperatingSystem) -> String {
         Some(name) => {
             let mods = Keystroke {
                 key: String::new(),
-                ..k.clone()
+                ..k
             };
             format!("{}{name}", mods.display(os))
         }
@@ -321,7 +321,7 @@ pub fn hint(label: &str, id: &str, cx: &App) -> String {
     let keymap = cx.try_global::<CurrentKeymap>().map(|k| &k.0);
     let key = command(id).and_then(|c| match keymap {
         Some(km) => keys_of(km, c).into_iter().next(),
-        None => c.defaults.first().map(|k| k.to_string()),
+        None => c.defaults.first().map(std::string::ToString::to_string),
     });
     match key {
         Some(k) => format!("{label}  {}", display_key(&k, cx.platform_info().os)),

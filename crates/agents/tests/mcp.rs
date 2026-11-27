@@ -99,7 +99,7 @@ fn stdio_server_lists_and_calls_tools_through_the_socket() {
     .join("\n");
     let mut out = Vec::new();
     // Returns when the input ends.
-    agents::mcp_stdio::run(input.as_bytes(), &mut out, Some(path.clone()));
+    agents::mcp_stdio::run(input.as_bytes(), &mut out, Some(path));
     let replies: Vec<Value> = String::from_utf8(out)
         .unwrap()
         .lines()

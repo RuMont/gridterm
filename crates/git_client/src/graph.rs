@@ -185,7 +185,7 @@ mod tests {
         spec.iter()
             .map(|(sha, parents)| CommitInfo {
                 sha: sha.to_string(),
-                parents: parents.iter().map(|p| p.to_string()).collect(),
+                parents: parents.iter().map(std::string::ToString::to_string).collect(),
                 ..Default::default()
             })
             .collect()

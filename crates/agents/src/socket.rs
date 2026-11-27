@@ -165,8 +165,8 @@ pub fn peer_pid(stream: &UnixStream) -> Option<i32> {
             stream.as_raw_fd(),
             libc::SOL_LOCAL,
             libc::LOCAL_PEERPID,
-            (&mut pid as *mut libc::pid_t).cast(),
-            &mut len,
+            (&raw mut pid).cast(),
+            &raw mut len,
         )
     };
     (rc == 0 && pid > 0).then_some(pid)
@@ -230,7 +230,7 @@ pub fn request(socket: &Path, method: &str) -> Result<Value, String> {
         .map_err(|e| format!("no answer from gridterm: {e}"))?;
     let v: Value = serde_json::from_str(&line).map_err(|e| format!("bad answer from gridterm: {e}"))?;
     match v.get("error") {
-        Some(e) => Err(e.as_str().map(str::to_owned).unwrap_or_else(|| e.to_string())),
+        Some(e) => Err(e.as_str().map_or_else(|| e.to_string(), str::to_owned)),
         None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
     }
 }

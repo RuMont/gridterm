@@ -255,7 +255,7 @@ impl GitPanel {
         let wake_task = cx.spawn(async move |this, cx| {
             while rx.next().await.is_some() {
                 while rx.try_recv().is_ok() {}
-                if this.update(cx, |p, cx| p.refresh(cx)).is_err() {
+                if this.update(cx, GitPanel::refresh).is_err() {
                     break;
                 }
             }
@@ -339,7 +339,7 @@ impl GitPanel {
                     log::warn!("git watcher unavailable, polling instead: {e:#}");
                     self.fallback_poll = Some(cx.spawn(async move |this, cx| loop {
                         cx.background_executor().timer(FALLBACK_POLL).await;
-                        if this.update(cx, |p, cx| p.refresh(cx)).is_err() {
+                        if this.update(cx, GitPanel::refresh).is_err() {
                             break;
                         }
                     }));
@@ -399,7 +399,7 @@ impl GitPanel {
         if self.open_commit == sha {
             return;
         }
-        self.open_commit = sha.clone();
+        self.open_commit.clone_from(&sha);
         self.open_files.clear();
         self.commit_highlights.clear();
         self.highlight_tasks.clear();
@@ -598,7 +598,7 @@ impl GitPanel {
         let work = cx.background_spawn(async move {
             let log = repo.log(limit);
             let started = std::time::Instant::now();
-            let graph = log.as_ref().map(|l| git_client::graph::layout(l)).unwrap_or_default();
+            let graph = log.as_ref().map_or_default(|l| git_client::graph::layout(l));
             (
                 repo.status(),
                 log,
@@ -684,7 +684,7 @@ impl GitPanel {
                             (_, Some(err)) => rows.push(Row::DiffInfo(err.clone())),
                             (None, _) => rows.push(Row::DiffInfo("Loading diff…".into())),
                             (Some(d), _) if d.binary => {
-                                rows.push(Row::DiffInfo("Binary file: stage it as a whole".into()))
+                                rows.push(Row::DiffInfo("Binary file: stage it as a whole".into()));
                             }
                             (Some(d), _) => {
                                 for (h, hunk) in d.hunks.iter().enumerate() {
@@ -1173,7 +1173,7 @@ impl GitPanel {
                     GitPanel::push,
                 ))
                 .item(item("Refresh".into(), IconName::RefreshCw, true, |p, _, cx| {
-                    p.refresh(cx)
+                    p.refresh(cx);
                 }))
             });
         div()
@@ -1335,13 +1335,13 @@ impl GitPanel {
                                     cx,
                                     move |repo, _| {
                                         if staged {
-                                            repo.unstage_all()?
+                                            repo.unstage_all()?;
                                         } else {
-                                            repo.stage_all()?
+                                            repo.stage_all()?;
                                         }
                                         Ok(OpOutcome::default())
                                     },
-                                )
+                                );
                             }),
                         ))
                     })
@@ -1351,11 +1351,7 @@ impl GitPanel {
                 let rel = change.path.to_string_lossy().to_string();
                 let (name, dir) = split_name(&rel);
                 let (name, dir) = (name.to_string(), dir.to_string());
-                let abs = self
-                    .repo
-                    .as_ref()
-                    .map(|r| r.root().join(&change.path))
-                    .unwrap_or_default();
+                let abs = self.repo.as_ref().map_or_default(|r| r.root().join(&change.path));
                 let group: SharedString = format!("git-row-{ix}").into();
                 let kind = change.kind;
                 let expanded = self
@@ -1400,12 +1396,12 @@ impl GitPanel {
                         div()
                             .flex()
                             .invisible()
-                            .group_hover(group, |s| s.visible())
+                            .group_hover(group, gpui_kit::Styled::visible)
                             .child(icon_button(
                                 ("insert-path", ix),
                                 IconName::SquareTerminal,
                                 cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                    cx.emit(PanelEvent::InsertPath(abs.clone()))
+                                    cx.emit(PanelEvent::InsertPath(abs.clone()));
                                 }),
                             )),
                     )
@@ -1414,7 +1410,7 @@ impl GitPanel {
                             ("toggle-stage", ix),
                             if staged { IconName::Minus } else { IconName::Plus },
                             cx.listener(move |this, _: &ClickEvent, w, cx| {
-                                this.toggle_file(toggle_change.clone(), staged, w, cx)
+                                this.toggle_file(toggle_change.clone(), staged, w, cx);
                             }),
                         )
                         .tooltip(move |w, cx| {
@@ -1492,7 +1488,7 @@ impl GitPanel {
                     LineKind::Removed => ("-", theme::red(), Some(theme::red())),
                     LineKind::Context => (" ", theme::subtext(), None),
                 };
-                let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
+                let num = |n: Option<u32>| n.map_or_default(|n| n.to_string());
                 row_base(("git-diff-line", ix).into())
                     .gap_1()
                     .pl(px(20.))
@@ -1729,7 +1725,7 @@ impl GitPanel {
                                 .flex_none()
                                 .w(px(REVERT_W))
                                 .invisible()
-                                .group_hover(group, |s| s.visible())
+                                .group_hover(group, gpui_kit::Styled::visible)
                                 .when(revertable, |d| {
                                     d.child(
                                         icon_button(
@@ -1996,7 +1992,7 @@ impl GitPanel {
                                 .min_w_0()
                                 .cursor_pointer()
                                 .text_color(rgb(theme::accent()))
-                                .hover(|s| s.underline())
+                                .hover(gpui_kit::Styled::underline)
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     terminal::view::open_url(&open);
@@ -2040,8 +2036,7 @@ impl GitPanel {
                 let header = details
                     .and_then(|d| d.files.get(f))
                     .and_then(|file| file.diff.hunks.get(h))
-                    .map(|h| h.header.clone())
-                    .unwrap_or_default();
+                    .map_or_default(|h| h.header.clone());
                 band(("history-hunk", ix).into())
                     .font_family("Menlo")
                     .text_color(rgb(theme::overlay0()))
@@ -2068,7 +2063,7 @@ impl GitPanel {
                     LineKind::Removed => ("-", theme::red(), Some(theme::red())),
                     LineKind::Context => (" ", theme::subtext(), None),
                 };
-                let num = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
+                let num = |n: Option<u32>| n.map_or_default(|n| n.to_string());
                 // The line in today's file: a removed line opens where its
                 // hunk lands.
                 let at = line.new_lineno.or_else(|| {
@@ -2252,7 +2247,7 @@ impl GitPanel {
                 PopupMenuItem::new("Reveal in Explorer")
                     .icon(IconName::FolderTree)
                     .disabled(!exists)
-                    .on_click(emit(PanelEvent::RevealInExplorer(path.clone()))),
+                    .on_click(emit(PanelEvent::RevealInExplorer(path))),
             )
             .item(
                 PopupMenuItem::new("Copy path")

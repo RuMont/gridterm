@@ -239,15 +239,7 @@ pub fn process_alive(pid: i32) -> bool {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
     // SAFETY: `info` is a properly sized, writable proc_bsdinfo and `size` matches it.
-    let n = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            (&mut info as *mut libc::proc_bsdinfo).cast(),
-            size,
-        )
-    };
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
     // SZOMB = 5
     n == size && info.pbi_status != 5
 }
@@ -292,8 +284,7 @@ pub fn utf8_locale() -> &'static str {
             .args(["read", "-g", "AppleLocale"])
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
+            .map_or_default(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
         // "es_ES@calendar=gregorian" → "es_ES"
         let base: String = apple
             .split('@')

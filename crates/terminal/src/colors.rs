@@ -135,14 +135,14 @@ pub fn named(n: NamedColor, overrides: &Colors, bold: bool) -> Rgb {
 
 pub fn dim(c: Rgb) -> Rgb {
     Rgb {
-        r: (c.r as u16 * 2 / 3) as u8,
-        g: (c.g as u16 * 2 / 3) as u8,
-        b: (c.b as u16 * 2 / 3) as u8,
+        r: (u16::from(c.r) * 2 / 3) as u8,
+        g: (u16::from(c.g) * 2 / 3) as u8,
+        b: (u16::from(c.b) * 2 / 3) as u8,
     }
 }
 
 pub fn to_u32(c: Rgb) -> u32 {
-    (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32
+    u32::from(c.r) << 16 | u32::from(c.g) << 8 | u32::from(c.b)
 }
 
 #[cfg(test)]
@@ -162,7 +162,7 @@ mod tests {
     pub fn contrast(a: u32, b: u32) -> f64 {
         let lum = |c: u32| {
             let ch = |v: u32| {
-                let v = v as f64 / 255.0;
+                let v = f64::from(v) / 255.0;
                 if v <= 0.03928 {
                     v / 12.92
                 } else {

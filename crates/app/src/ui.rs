@@ -25,7 +25,7 @@ pub fn icon_button(
         .hover(|s| s.bg(rgb(theme::surface0())).text_color(rgb(theme::text())))
         .on_click(move |e, w, cx| {
             cx.stop_propagation();
-            on_click(e, w, cx)
+            on_click(e, w, cx);
         })
         .child(Icon::new(icon).size(px(14.)))
 }

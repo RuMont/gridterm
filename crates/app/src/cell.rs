@@ -461,7 +461,7 @@ impl CellView {
             }
         };
         let id = self.terminal.read(cx).id();
-        let cwd = s.cwd.as_deref().map(terminal::display_path).unwrap_or_default();
+        let cwd = s.cwd.as_deref().map_or_default(terminal::display_path);
         let (bg, fg) = tab_colors(terminal_visible);
         let terminal_tab = div()
             .id("tab-terminal")
@@ -520,7 +520,7 @@ impl CellView {
             let visible = self.visible.is_none() && self.shown_terminal == i + 1;
             let (bg, fg) = tab_colors(visible);
             let t = child.read(cx);
-            let cwd = t.cwd().map(|p| terminal::display_path(p)).unwrap_or_default();
+            let cwd = t.cwd().map_or_default(|p| terminal::display_path(p));
             let child = child.clone();
             div()
                 .id(("tab-child", i))
@@ -580,8 +580,7 @@ impl CellView {
                 .read(cx)
                 .path()
                 .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
+                .map_or_default(|n| n.to_string_lossy().into_owned());
             div()
                 .id(("tab-file", i))
                 .flex()
@@ -599,7 +598,7 @@ impl CellView {
                 .border_l_1()
                 .border_color(rgb(p.border))
                 .cursor_pointer()
-                .when(tab.preview, |el| el.italic())
+                .when(tab.preview, gpui_kit::Styled::italic)
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     if e.click_count() >= 2 {
                         if let Some(t) = this.tabs.get_mut(i) {
@@ -678,7 +677,7 @@ impl CellView {
                         move |_, _, cx| terminal.update(cx, |_, cx| cx.emit(TerminalViewEvent::ToggleZoom)),
                     ))
                     .child(tab_button("close", "✕", move |_, _, cx| {
-                        terminal2.update(cx, |_, cx| cx.emit(TerminalViewEvent::CloseRequested))
+                        terminal2.update(cx, |_, cx| cx.emit(TerminalViewEvent::CloseRequested));
                     })),
             )
     }
@@ -720,7 +719,7 @@ fn busy_dot(id: u64, activity: Activity) -> AnyElement {
             Animation::new(std::time::Duration::from_millis(1400))
                 .repeat()
                 .with_easing(pulsating_between(0.3, 1.0)),
-            |el, delta| el.opacity(delta),
+            gpui_kit::Styled::opacity,
         )
         .into_any_element()
     } else {

@@ -208,7 +208,7 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
         return;
     }
     let token = shared.token.clone();
-    let peer_port = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
+    let peer_port = stream.peer_addr().map_or(0, |a| a.port());
     let anonymous = Arc::new(AtomicBool::new(false));
     let anon = anonymous.clone();
     // The signature is tungstenite's handshake callback.

@@ -152,8 +152,7 @@ pub(crate) fn write_request(request: &OpenRequest) -> io::Result<PathBuf> {
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
+        .map_or_default(|d| d.as_nanos());
     let path = dir.join(format!("open-{}-{nanos}.{REQUEST_EXT}", std::process::id()));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -347,11 +346,11 @@ mod tests {
     #[test]
     fn open_arguments() {
         let here = std::env::current_dir().unwrap().canonicalize().unwrap();
-        let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let s = |v: &[&str]| v.iter().map(std::string::ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
             parse_open(&[]).unwrap(),
             OpenRequest {
-                cwd: Some(here.clone()),
+                cwd: Some(here),
                 command: String::new()
             }
         );

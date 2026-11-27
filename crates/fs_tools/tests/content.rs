@@ -22,7 +22,7 @@ fn run(root: &Path, query: &ContentQuery) -> (Vec<FileMatches>, SearchSummary) {
     let out = Arc::new(Mutex::new(Vec::new()));
     let o = out.clone();
     let summary = search(root, query, Arc::new(AtomicBool::new(false)), move |fm| {
-        o.lock().push(fm)
+        o.lock().push(fm);
     })
     .unwrap();
     let mut files = std::mem::take(&mut *out.lock());

@@ -115,7 +115,7 @@ token_fns!(
 
 /// `accent` with the given alpha (0–255), as RGBA.
 pub fn accent_alpha(alpha: u8) -> u32 {
-    accent() << 8 | alpha as u32
+    accent() << 8 | u32::from(alpha)
 }
 
 pub const ROW_HEIGHT: f32 = 24.0;
@@ -138,7 +138,7 @@ mod tests {
     fn contrast(a: u32, b: u32) -> f64 {
         let lum = |c: u32| {
             let ch = |v: u32| {
-                let v = v as f64 / 255.0;
+                let v = f64::from(v) / 255.0;
                 if v <= 0.03928 {
                     v / 12.92
                 } else {

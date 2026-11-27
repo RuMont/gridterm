@@ -394,7 +394,7 @@ impl TerminalView {
     /// `Pty::running_processes`). Reads the process table: call it on
     /// demand, not per frame.
     pub fn running_processes(&self) -> Vec<String> {
-        self.pty.as_ref().map(|p| p.running_processes()).unwrap_or_default()
+        self.pty.as_ref().map_or_default(super::backend::Pty::running_processes)
     }
 
     pub fn has_exited(&self) -> bool {
@@ -600,7 +600,7 @@ impl TerminalView {
 
     /// Pid of the shell's process (the `login` wrapper on macOS).
     pub fn child_pid(&self) -> Option<i32> {
-        self.pty.as_ref().map(|p| p.pid())
+        self.pty.as_ref().map(super::backend::Pty::pid)
     }
 
     /// Hangs up this terminal's shell (used when the app quits).
@@ -611,7 +611,7 @@ impl TerminalView {
     }
 
     pub fn shell_alive(&self) -> bool {
-        self.pty.as_ref().is_some_and(|p| p.is_alive())
+        self.pty.as_ref().is_some_and(super::backend::Pty::is_alive)
     }
 
     pub fn kill_shell(&self) {
@@ -627,7 +627,7 @@ impl TerminalView {
             self.blink_task = active.then(|| {
                 cx.spawn(async move |this, cx| loop {
                     cx.background_executor().timer(BLINK_INTERVAL).await;
-                    if this.update(cx, |v, cx| v.blink_tick(cx)).is_err() {
+                    if this.update(cx, TerminalView::blink_tick).is_err() {
                         break;
                     }
                 })
@@ -667,7 +667,7 @@ impl TerminalView {
         let pid = if self.exited {
             None
         } else {
-            self.pty.as_ref().and_then(|p| p.foreground_pid())
+            self.pty.as_ref().and_then(super::backend::Pty::foreground_pid)
         };
         if pid != self.foreground.map(|(p, _)| p) {
             let program = pid.is_some_and(|p| crate::cwd::process_name(p).is_some_and(|n| !keys::is_shell(&n)));
@@ -921,7 +921,7 @@ impl TerminalView {
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         let item = cx.read_from_clipboard();
-        if let Some(text) = item.as_ref().and_then(|i| i.text()) {
+        if let Some(text) = item.as_ref().and_then(gpui_kit::ClipboardItem::text) {
             self.term.lock().scroll_display(Scroll::Bottom);
             self.paste_text(&text);
             return;
@@ -938,7 +938,7 @@ impl TerminalView {
 
     /// Whether the shell itself (no program) runs in the foreground.
     fn shell_in_foreground(&self) -> bool {
-        let name = self.pty.as_ref().and_then(|p| p.foreground_name());
+        let name = self.pty.as_ref().and_then(super::backend::Pty::foreground_name);
         name.is_none_or(|n| keys::is_shell(&n))
     }
 
@@ -996,7 +996,7 @@ impl TerminalView {
         };
         let offset = self.term.lock().grid().display_offset() as i32;
         let (col, line) = (point.column.0 + 1, (point.line.0 + offset) as usize + 1);
-        let code = button + 4 * mods.shift as u8 + 8 * mods.alt as u8 + 16 * mods.control as u8;
+        let code = button + 4 * u8::from(mods.shift) + 8 * u8::from(mods.alt) + 16 * u8::from(mods.control);
         let sgr = self.term.lock().mode().contains(TermMode::SGR_MOUSE);
         let bytes = if sgr {
             format!("\x1b[<{code};{col};{line}{}", if pressed { 'M' } else { 'm' }).into_bytes()
@@ -1193,7 +1193,11 @@ impl TerminalView {
             self.selecting = false;
             {
                 let mut term = self.term.lock();
-                if term.selection.as_ref().is_some_and(|s| s.is_empty()) {
+                if term
+                    .selection
+                    .as_ref()
+                    .is_some_and(alacritty_terminal::selection::Selection::is_empty)
+                {
                     term.selection = None;
                 }
             }
@@ -1243,7 +1247,7 @@ impl TerminalView {
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let label = self.label();
-        let cwd = self.cwd.as_deref().map(backend::display_path).unwrap_or_default();
+        let cwd = self.cwd.as_deref().map_or_default(backend::display_path);
         let p = palette();
         let (fg, bg) = if self.active {
             (rgb(p.on_accent), rgb(p.accent))
@@ -1325,10 +1329,7 @@ impl TerminalView {
                 let metrics = geometry.get().metrics.unwrap_or_else(|| {
                     let ts = window.text_system();
                     let font_id = ts.resolve_font(&font);
-                    let cell_width = ts
-                        .advance(font_id, font_size, 'm')
-                        .map(|s| f32::from(s.width))
-                        .unwrap_or(8.0);
+                    let cell_width = ts.advance(font_id, font_size, 'm').map_or(8.0, |s| f32::from(s.width));
                     Metrics {
                         cell_width,
                         line_height: (settings.font_size * settings.line_height).round(),
@@ -1437,7 +1438,7 @@ fn header_button(
         .hover(|s| s.bg(rgba(0xffffff22)))
         .on_click(move |e, w, cx| {
             cx.stop_propagation();
-            on_click(e, w, cx)
+            on_click(e, w, cx);
         })
         .child(label)
 }
@@ -1626,7 +1627,7 @@ fn layout_grid(
                     Bounds::new(rect.origin, size(px(2.), rect.size.height)),
                     cursor_color,
                     false,
-                ))
+                ));
             }
             (true, CursorShape::Underline) => {
                 let y = rect.bottom() - px(2.);
@@ -1634,7 +1635,7 @@ fn layout_grid(
                     Bounds::new(point(rect.origin.x, y), size(rect.size.width, px(2.))),
                     cursor_color,
                     false,
-                ))
+                ));
             }
             _ => plan.cursor_under = Some((rect, cursor_color, true)),
         }

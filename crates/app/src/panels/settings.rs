@@ -94,7 +94,7 @@ impl SettingsPanel {
                 .cursor_pointer()
                 .bg(rgb(if on { theme::accent() } else { theme::surface1() }))
                 .flex()
-                .when(on, |el| el.justify_end())
+                .when(on, gpui_kit::Styled::justify_end)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.update(cx, f)))
                 .child(div().size(px(14.)).bg(rgb(theme::crust()))),
         )
@@ -116,7 +116,7 @@ fn row(label: &'static str) -> Div {
 impl Render for SettingsPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = &self.config;
-        let path = Config::path().map(|p| terminal::display_path(&p)).unwrap_or_default();
+        let path = Config::path().map_or_default(|p| terminal::display_path(&p));
         div()
             .id("settings")
             .flex()

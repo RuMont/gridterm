@@ -326,12 +326,7 @@ impl Runner<'_> {
     }
 
     fn term_text(&mut self, idx: usize) -> String {
-        self.read(|ws, cx| {
-            ws.terminals
-                .get(idx)
-                .map(|t| t.read(cx).visible_text())
-                .unwrap_or_default()
-        })
+        self.read(|ws, cx| ws.terminals.get(idx).map_or_default(|t| t.read(cx).visible_text()))
     }
 
     fn active_text(&mut self) -> String {
@@ -403,7 +398,7 @@ impl Runner<'_> {
         let f = frames.clone();
         self.app(move |w, _| w.on_next_frame(move |w, _| tick(f, until, w)));
         self.sleep(ms + 50).await;
-        frames.get() as f64 * 1000.0 / ms as f64
+        f64::from(frames.get()) * 1000.0 / ms as f64
     }
 
     /// Same as `count_frames` but forces a redraw every frame (calibration).
@@ -420,10 +415,10 @@ impl Runner<'_> {
         let f = frames.clone();
         self.app(move |w, _| {
             w.refresh();
-            w.on_next_frame(move |w, _| tick(f, until, w))
+            w.on_next_frame(move |w, _| tick(f, until, w));
         });
         self.sleep(ms + 50).await;
-        frames.get() as f64 * 1000.0 / ms as f64
+        f64::from(frames.get()) * 1000.0 / ms as f64
     }
 
     /// Measures how late a 5 ms timer resumes on the UI thread: each delay is
@@ -458,7 +453,7 @@ fn process_start() -> Option<std::time::SystemTime> {
             std::process::id() as i32,
             libc_bsdinfo::PROC_PIDTBSDINFO,
             0,
-            (&mut info as *mut libc_bsdinfo::proc_bsdinfo).cast(),
+            (&raw mut info).cast(),
             size,
         )
     };
@@ -497,8 +492,8 @@ pub fn start(window: &mut Window, cx: &mut Context<Workspace>) {
 
     if phase == "warmup" {
         // First launch of a new binary pays macOS's security scan; quit at once.
-        let ff = first_frame.clone();
-        let out2 = out.clone();
+        let ff = first_frame;
+        let out2 = out;
         cx.spawn_in(window, async move |_, cx| {
             cx.background_executor().timer(Duration::from_millis(500)).await;
             std::fs::write(out2.join("first_launch_ms"), format!("{:?}", ff.get())).ok();
@@ -721,10 +716,7 @@ async fn external_phase(r: &mut Runner<'_>, out: &Path) {
             let (n, text) = r.read(|ws, cx| {
                 (
                     ws.terminals.len(),
-                    ws.terminals
-                        .last()
-                        .map(|t| t.read(cx).visible_text())
-                        .unwrap_or_default(),
+                    ws.terminals.last().map_or_default(|t| t.read(cx).visible_text()),
                 )
             });
             r.shot("EX2-command");
@@ -761,12 +753,7 @@ async fn external_phase(r: &mut Runner<'_>, out: &Path) {
                         .is_some_and(|t| t.read(cx).visible_text().contains("EX3_21"))
                 })
                 .await;
-            let text = r.read(|ws, cx| {
-                ws.terminals
-                    .last()
-                    .map(|t| t.read(cx).visible_text())
-                    .unwrap_or_default()
-            });
+            let text = r.read(|ws, cx| ws.terminals.last().map_or_default(|t| t.read(cx).visible_text()));
             ok.ok_or_else(|| format!("no output:\n{text}"))?;
             Ok("EX3_21".into())
         }
@@ -794,12 +781,7 @@ async fn external_phase(r: &mut Runner<'_>, out: &Path) {
                         .is_some_and(|t| t.read(cx).visible_text().replace('\n', "").contains(&w2))
                 })
                 .await;
-            let text = r.read(|ws, cx| {
-                ws.terminals
-                    .last()
-                    .map(|t| t.read(cx).visible_text())
-                    .unwrap_or_default()
-            });
+            let text = r.read(|ws, cx| ws.terminals.last().map_or_default(|t| t.read(cx).visible_text()));
             ok.ok_or_else(|| format!("expected {want:?}:\n{text}"))?;
             ensure!(r.n_terms() == before + 1, "no new terminal");
             ensure!(!file.exists(), "request file left behind");
@@ -884,7 +866,7 @@ async fn restore_phase(r: &mut Runner<'_>) {
         let cwds: Vec<String> = r.read(|ws, cx| {
             ws.terminals
                 .iter()
-                .map(|t| t.read(cx).cwd().map(|p| p.display().to_string()).unwrap_or_default())
+                .map(|t| t.read(cx).cwd().map_or_default(|p| p.display().to_string()))
                 .collect()
         });
         ensure!(cwds == expected, "cwds {cwds:?} != {expected:?}");
@@ -1121,7 +1103,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         counting.set(false);
         let renders = r.read(move |ws, cx| ws.terminals[active].read(cx).render_count()) - before;
         let batches = r.read(move |ws, cx| ws.terminals[active].read(cx).output_batches()) - batches_before;
-        let frames = frames.get() as u64;
+        let frames = u64::from(frames.get());
         let max = elapsed.as_millis() as u64 / 4 + 10;
         let detail = format!("{batches} lotes, {renders} renders, {frames} frames en {elapsed:?}");
         ensure!(batches <= max, "batching: {detail} (max {max} lotes)");
@@ -1307,7 +1289,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     ws.pending_shrink.as_ref().map(|p| p.doomed.len()),
                 )
             });
-            r.with(|ws, w, cx| ws.cancel_shrink(w, cx));
+            r.with(super::Workspace::cancel_shrink);
             ensure!(cols == 4 && rows_cfg == 2, "config changed to {cols}x{rows_cfg}");
             ensure!(
                 doomed == Some(n - 1),
@@ -1380,9 +1362,9 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             move |ws, _, cx| {
                 ws.explorer.update(cx, |e, cx| {
                     if !e.expanded.contains(&src) {
-                        e.toggle_dir(&src, cx)
+                        e.toggle_dir(&src, cx);
                     }
-                })
+                });
             }
         });
         // another terminal in the same repo
@@ -1391,7 +1373,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 ws.terminals
                     .iter()
                     .skip(1)
-                    .find(|t| t.read(cx).cwd().map(|p| p.as_path()) == ws.context.root.as_deref())
+                    .find(|t| t.read(cx).cwd().map(std::path::PathBuf::as_path) == ws.context.root.as_deref())
                     .map(|t| t.read(cx).id())
             })
             .ok_or("no second terminal in the repo")?;
@@ -1464,8 +1446,8 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                         o.respect_gitignore = false;
                     },
                     cx,
-                )
-            })
+                );
+            });
         });
         r.wait_until(2000, |ws, cx| {
             ws.explorer.read(cx).rows.iter().any(|row| row.entry.name == "ignored")
@@ -1480,8 +1462,8 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                         o.respect_gitignore = true;
                     },
                     cx,
-                )
-            })
+                );
+            });
         });
         r.wait_until(2000, |ws, cx| {
             !ws.explorer.read(cx).rows.iter().any(|row| row.entry.name == "ignored")
@@ -1504,7 +1486,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 ws.explorer.update(cx, |e, cx| {
                     w.focus(&e.focus_handle, cx);
                     e.select_index(0, cx);
-                })
+                });
             });
             // rows: docs, src, ... (dirs first). Select "docs".
             let first = r.read(|ws, cx| ws.explorer.read(cx).selected.clone());
@@ -1579,7 +1561,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
 
     case!(r, "E3", "Badges de estado git en archivos y carpetas", {
         write(&repo.join("src/lib.rs"), "pub fn x() { /* changed */ }\n");
-        r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.refresh(cx)));
+        r.with(|ws, _, cx| ws.git.update(cx, super::super::panels::git::GitPanel::refresh));
         let lib = repo.join("src/lib.rs");
         let src = repo.join("src");
         let ok = r
@@ -1600,13 +1582,13 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             let docs = docs.clone();
             move |ws, w, cx| {
                 let ex = ws.explorer.clone();
-                ws.on_panel_event(&ex, &crate::panels::PanelEvent::Cd(docs), w, cx)
+                ws.on_panel_event(&ex, &crate::panels::PanelEvent::Cd(docs), w, cx);
             }
         });
         let d2 = docs.clone();
         let ok = r
             .wait_until(2000, move |ws, cx| {
-                ws.terminals[active].read(cx).cwd().map(|p| p.as_path()) == Some(d2.as_path())
+                ws.terminals[active].read(cx).cwd().map(std::path::PathBuf::as_path) == Some(d2.as_path())
             })
             .await;
         ensure!(ok.is_some(), "cd did not change cwd");
@@ -1614,10 +1596,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         // copy path via row action is a clipboard write; verify the explorer exposes it
         r.app(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(String::new())));
         let readme = repo.join("README.md");
-        r.app({
-            let readme = readme.clone();
-            move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(readme.display().to_string()))
-        });
+        r.app(move |_, cx| cx.write_to_clipboard(ClipboardItem::new_string(readme.display().to_string())));
         Ok("cd + insert (E2) ok; Finder no se abre en tests".into())
     });
 
@@ -1629,7 +1608,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 e.case_sensitive = case;
                 e.query.update(cx, |i, cx| i.set_value(q, w, cx));
                 e.schedule_search(Duration::ZERO, cx);
-            })
+            });
         });
     };
     let content_files = |r: &mut Runner<'_>| -> Vec<String> {
@@ -1698,7 +1677,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         r.wait_search().await.ok_or("search did not finish")?;
         let files = content_files(r);
         ensure!(
-            !files.is_empty() && files.iter().all(|f| f.starts_with("src/") || !f.contains('/') && false),
+            !files.is_empty() && files.iter().all(|f| f.starts_with("src/")),
             "files outside src: {files:?}"
         );
         Ok(format!("{files:?}"))
@@ -1745,7 +1724,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             ws.search.update(cx, |s, cx| {
                 s.input.update(cx, |i, cx| i.set_value("readme", w, cx));
                 s.apply_query(cx);
-            })
+            });
         });
         let ok = r
             .wait_until(2000, |ws, cx| {
@@ -1777,8 +1756,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 .read(cx)
                 .indexes
                 .first()
-                .map(|i| i.indexed_count())
-                .unwrap_or(0)
+                .map_or(0, fs_tools::index::FileIndex::indexed_count)
         });
         r.focus_id(plain_id.get())?;
         let plain = fx.plain.clone();
@@ -1795,7 +1773,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 let first = s.indexes.first();
                 (
                     first.is_some_and(|i| i.root() == repo),
-                    first.map(|i| i.indexed_count()).unwrap_or(0),
+                    first.map_or(0, fs_tools::index::FileIndex::indexed_count),
                     s.indexes.len(),
                 )
             }
@@ -1815,7 +1793,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             ws.search.update(cx, |s, cx| {
                 s.input.update(cx, |i, cx| i.set_value("zzz_unique", w, cx));
                 s.apply_query(cx);
-            })
+            });
         });
         let ok = r
             .wait_until(3000, |ws, cx| {
@@ -1862,7 +1840,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 ws.search.update(cx, |s, cx| {
                     s.input.update(cx, |i, cx| i.set_value("guide", w, cx));
                     s.apply_query(cx);
-                })
+                });
             });
             r.wait_until(2000, |ws, cx| {
                 ws.search
@@ -1883,7 +1861,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             let docs = repo.join("docs");
             let ok = r
                 .wait_until(2000, move |ws, cx| {
-                    ws.terminals[0].read(cx).cwd().map(|p| p.as_path()) == Some(docs.as_path())
+                    ws.terminals[0].read(cx).cwd().map(std::path::PathBuf::as_path) == Some(docs.as_path())
                 })
                 .await;
             ensure!(ok.is_some(), "⌥↩ did not cd");
@@ -1904,7 +1882,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             r.key("cmd-p");
             r.with(|ws, w, cx| {
                 ws.search
-                    .update(cx, |s, cx| s.input.update(cx, |i, cx| i.set_value("guide", w, cx)))
+                    .update(cx, |s, cx| s.input.update(cx, |i, cx| i.set_value("guide", w, cx)));
             });
             r.key("escape");
             r.sleep(100).await;
@@ -1915,7 +1893,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             // Content search, no selection in the cell: its text selected.
             r.with(|ws, w, cx| {
                 ws.explorer
-                    .update(cx, |e, cx| e.query.update(cx, |q, cx| q.set_value("needle", w, cx)))
+                    .update(cx, |e, cx| e.query.update(cx, |q, cx| q.set_value("needle", w, cx)));
             });
             r.key("cmd-1");
             r.sleep(100).await;
@@ -1982,7 +1960,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 ws.search.update(cx, |s, cx| {
                     s.input.update(cx, |i, cx| i.set_value("guide", w, cx));
                     s.apply_query(cx);
-                })
+                });
             });
             r.wait_until(2000, |ws, cx| {
                 ws.search
@@ -2149,8 +2127,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     .read(cx)
                     .children()
                     .first()
-                    .map(|t| t.read(cx).visible_text())
-                    .unwrap_or_default()
+                    .map_or_default(|t| t.read(cx).visible_text())
             });
             ensure!(shown.is_some(), "child did not start in {cwd_line}:\n{text}");
             let parent_text = r.term_text(0);
@@ -2302,7 +2279,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
             r.key("cmd-1");
             // Written to the shell directly: typing needs a painted window.
             let shell = |r: &mut Runner<'_>, cmd: &'static str| {
-                r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)))
+                r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)));
             };
             shell(
                 r,
@@ -2369,7 +2346,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(
                     ImageFormat::Png,
                     PNG.to_vec(),
-                )))
+                )));
             });
             r.key("cmd-v");
             let got = r
@@ -2468,7 +2445,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         {
             r.key("cmd-1");
             let shell = |r: &mut Runner<'_>, cmd: &'static str| {
-                r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)))
+                r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)));
             };
             shell(r, "clear; seq 1 400\r");
             r.wait_text(0, "400", 3000).await.ok_or("seq did not run")?;
@@ -2547,7 +2524,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 pressed_button: None,
                 modifiers: none,
             }));
-            r.with(|ws, _, cx| ws.terminals[0].update(cx, |t, cx| t.scroll_to_bottom(cx)));
+            r.with(|ws, _, cx| ws.terminals[0].update(cx, terminal::TerminalView::scroll_to_bottom));
             shell(r, "clear\r");
             ensure!(history > 0, "no scrollback after seq");
             ensure!(hidden_before, "shown while following the output");
@@ -2654,7 +2631,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
     });
     write(&repo.join("README.md"), "hello needle\nchanged\n");
     // Make sure the change is there for the next cases regardless of Gi10.
-    r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.refresh(cx)));
+    r.with(|ws, _, cx| ws.git.update(cx, super::super::panels::git::GitPanel::refresh));
     r.wait_until(3000, |ws, cx| {
         ws.git.read(cx).status.as_ref().is_some_and(|s| !s.unstaged.is_empty())
     })
@@ -2682,8 +2659,8 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 g.run_op("Unstage all", w, cx, |repo, _| {
                     repo.unstage_all()?;
                     Ok(Default::default())
-                })
-            })
+                });
+            });
         });
         r.wait_until(3000, |ws, cx| {
             ws.git.read(cx).status.as_ref().is_some_and(|s| s.staged.is_empty())
@@ -2695,8 +2672,8 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 g.run_op("Stage all", w, cx, |repo, _| {
                     repo.stage_all()?;
                     Ok(Default::default())
-                })
-            })
+                });
+            });
         });
         r.wait_until(3000, |ws, cx| {
             ws.git
@@ -2717,7 +2694,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     m.set_value("e2e commit one", w, cx);
                     m.focus(w, cx);
                 });
-            })
+            });
         });
         r.key("cmd-enter");
         let ok = r
@@ -2811,8 +2788,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     .args(args)
                     .current_dir(&repo)
                     .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
+                    .is_ok_and(|o| o.status.success())
             };
             ensure!(git(&["checkout", "-q", "-b", long]), "cannot create the branch");
             let shown = r
@@ -2859,7 +2835,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         "Historial en ventana flotante: ruta, celda y posición en el grid; Esc la cierra",
         {
             let active = r.active().ok_or("no active cell")?;
-            r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.open_history(cx)));
+            r.with(|ws, _, cx| ws.git.update(cx, super::super::panels::git::GitPanel::open_history));
             r.wait_until(2000, |ws, _| ws.history_open)
                 .await
                 .ok_or("history window did not open")?;
@@ -2943,7 +2919,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         let i = 1;
         let (sha, pos) = r.read(move |ws, cx| {
             let g = ws.git.read(cx);
-            (g.log.get(i).map(|c| c.sha.clone()), g.graph_bounds.borrow().get(&i).map(|b| b.center()))
+            (g.log.get(i).map(|c| c.sha.clone()), g.graph_bounds.borrow().get(&i).map(gpui_kit::Bounds::center))
         });
         let (sha, pos) = (sha.ok_or("no second commit")?, pos.ok_or("commit row not painted in the panel")?);
         r.click_at(pos, 1, Modifiers::default());
@@ -2967,7 +2943,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         ensure!(files > 0, "no files listed");
         ensure!(lines == 0, "files should start closed, {lines} diff lines shown");
         // In the window a click on the commit folds it.
-        let wide = r.read(move |ws, cx| ws.git.read(cx).graph_bounds.borrow().get(&i).map(|b| b.center())).ok_or("commit row not painted in the window")?;
+        let wide = r.read(move |ws, cx| ws.git.read(cx).graph_bounds.borrow().get(&i).map(gpui_kit::Bounds::center)).ok_or("commit row not painted in the window")?;
         r.click_at(wide, 1, Modifiers::default());
         let folded = r.wait_until(1000, |ws, cx| ws.git.read(cx).open_commit.is_none()).await;
         let still_open = r.read(|ws, _| ws.history_open);
@@ -2988,8 +2964,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     .args(args)
                     .current_dir(&repo)
                     .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
+                    .is_ok_and(|o| o.status.success())
             };
             let big: String = (1..=300).map(|n| format!("line {n}\n")).collect();
             write(&repo.join("big.txt"), &big);
@@ -3088,8 +3063,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     .args(args)
                     .current_dir(&repo)
                     .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
+                    .is_ok_and(|o| o.status.success())
             };
             // The hunk starts inside a block comment opened 10 lines above.
             let mut code = String::from("/* a long comment\n");
@@ -3147,8 +3121,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     names
                         .iter()
                         .find(|(t, _)| t.contains(needle))
-                        .map(|(_, n)| n.clone())
-                        .unwrap_or_default()
+                        .map_or_default(|(_, n)| n.clone())
                 };
                 ensure!(
                     of("still comment 9").contains(&"comment"),
@@ -3319,8 +3292,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     .args(args)
                     .current_dir(&repo)
                     .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
+                    .is_ok_and(|o| o.status.success())
             };
             let file = repo.join("marks.txt");
             write(&file, "1\n2\n3\n4\n5\n6\n");
@@ -3335,9 +3307,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 .await
                 .ok_or("file not opened")?;
             let marks = |ws: &Workspace, cx: &App| {
-                visible_viewer(ws, cx, 0)
-                    .map(|v| v.read(cx).line_changes.clone())
-                    .unwrap_or_default()
+                visible_viewer(ws, cx, 0).map_or_default(|v| v.read(cx).line_changes.clone())
             };
             let result: Result<String, String> = async {
                 // Edited on disk: the viewer reloads and marks the lines.
@@ -3408,7 +3378,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                 ws.git.update(cx, |g, cx| {
                     g.confirm_revert = Some(t);
                     cx.notify();
-                })
+                });
             }
         });
         r.sleep(200).await;
@@ -3440,7 +3410,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
 
     case!(r, "Gi6", "Push sin upstream pide confirmación", {
         git(&repo, &["checkout", "-q", "-b", "feature-e2e"]);
-        r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.refresh(cx)));
+        r.with(|ws, _, cx| ws.git.update(cx, super::super::panels::git::GitPanel::refresh));
         r.wait_until(3000, |ws, cx| {
             ws.git
                 .read(cx)
@@ -3461,7 +3431,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok("ok".into())
     });
     git(&repo, &["checkout", "-q", "main"]);
-    r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.refresh(cx)));
+    r.with(|ws, _, cx| ws.git.update(cx, super::super::panels::git::GitPanel::refresh));
     r.sleep(500).await;
 
     case!(r, "Gi8", "El progreso de push se ve en tiempo real", {
@@ -3554,7 +3524,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
     });
 
     case!(r, "Gi11", "El historial es una lista virtualizada", {
-        r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.refresh(cx)));
+        r.with(|ws, _, cx| ws.git.update(cx, super::super::panels::git::GitPanel::refresh));
         r.wait_until(3000, |ws, cx| ws.git.read(cx).log.len() >= 200).await;
         r.with(|ws, _, cx| ws.git.update(cx, |_, cx| cx.notify()));
         r.sleep(300).await;
@@ -3793,9 +3763,9 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         }
         .await;
         // Reset all: defaults back, file removed.
-        r.with(|ws, w, cx| ws.open_keymap(w, cx));
+        r.with(super::Workspace::open_keymap);
         let ed = editor(r)?;
-        r.app(move |_, cx| ed.update(cx, |e, cx| e.reset_all(cx)));
+        r.app(move |_, cx| ed.update(cx, super::super::keymap_editor::KeymapEditor::reset_all));
         r.sleep(100).await;
         r.key("escape");
         r.sleep(100).await;
@@ -3824,7 +3794,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
                     };
                     ws.settings.update(cx, |s, cx| s.set_config(c.clone(), cx));
                     ws.apply_config(c, w, cx);
-                })
+                });
             };
             let grid_x = |r: &mut Runner<'_>| {
                 r.read(|ws, _| {
@@ -3935,7 +3905,7 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         let cwds: Vec<String> = r.read(|ws, cx| {
             ws.terminals
                 .iter()
-                .map(|t| t.read(cx).cwd().map(|p| p.display().to_string()).unwrap_or_default())
+                .map(|t| t.read(cx).cwd().map_or_default(|p| p.display().to_string()))
                 .collect()
         });
         std::fs::write(r.out.join("expected_cwds"), cwds.join(":")).ok();
@@ -3993,7 +3963,7 @@ async fn pending_cases(r: &mut Runner<'_>, fx: &Fixture) {
     r.key("cmd-t");
     r.key("cmd-1");
     r.sleep(800).await;
-    let active_view = |r: &mut Runner<'_>| r.read(|ws, cx| ws.active_terminal(cx)).expect("active terminal");
+    let active_view = |r: &mut Runner<'_>| r.read(super::Workspace::active_terminal).expect("active terminal");
 
     // ------------------------------------------------------------------ IME --
     case!(
@@ -4532,7 +4502,7 @@ async fn pending_cases(r: &mut Runner<'_>, fx: &Fixture) {
             let img = w.render_to_image().ok()?;
             let scale = img.width() as f32 / f32::from(w.viewport_size().width);
             let px = img.get_pixel((f32::from(p.x) * scale) as u32, (f32::from(p.y) * scale) as u32);
-            Some((px[0] as u32) << 16 | (px[1] as u32) << 8 | px[2] as u32)
+            Some(u32::from(px[0]) << 16 | u32::from(px[1]) << 8 | u32::from(px[2]))
         })
     };
     let close = |a: u32, b: u32| {
@@ -4657,7 +4627,7 @@ async fn pending_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.sleep(300).await;
             let (w, cols1, cell_w) = r.read(|ws, cx| {
                 let t = ws.terminals[0].read(cx);
-                (ws.weights.cols[0].clone(), t.grid_size().0, t.grid_size().1 as f32)
+                (ws.weights.cols[0].clone(), t.grid_size().0, f32::from(t.grid_size().1))
             });
             let _ = cell_w;
             let frac = w[0] / (w[0] + w[1]);
@@ -4754,7 +4724,7 @@ async fn pending_cases(r: &mut Runner<'_>, fx: &Fixture) {
             click_count: 2,
         }));
         let w = r.read(|ws, _| ws.weights.cols[0].clone());
-        ensure!(w.iter().all(|x| *x == 1.0), "{w:?}");
+        ensure!(w.iter().all(|x| (*x - 1.0).abs() < 1e-6), "{w:?}");
         Ok(format!("{w:?}"))
     });
 
@@ -4801,7 +4771,7 @@ async fn pending_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.key("cmd-1");
             let after = r.read(|ws, _| ws.weights.clone());
             ensure!(after == before, "weights changed by focus/zoom: {before:?} → {after:?}");
-            let session = r.read(|ws, cx| ws.session(cx));
+            let session = r.read(super::Workspace::session);
             ensure!(
                 session.row_weights == before.rows && session.col_weights == before.cols,
                 "session weights {:?} / {:?}",
@@ -4812,7 +4782,8 @@ async fn pending_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.sleep(200).await;
             let reset = r.read(|ws, _| ws.weights.clone());
             ensure!(
-                reset.rows.iter().all(|w| *w == 1.0) && reset.cols.iter().flatten().all(|w| *w == 1.0),
+                reset.rows.iter().all(|w| (*w - 1.0).abs() < 1e-6)
+                    && reset.cols.iter().flatten().all(|w| (*w - 1.0).abs() < 1e-6),
                 "not reset after adding: {reset:?}"
             );
             Ok("ok".into())
@@ -4838,7 +4809,7 @@ async fn style_cases(r: &mut Runner<'_>) {
             let img = w.render_to_image().ok()?;
             let scale = img.width() as f32 / f32::from(w.viewport_size().width);
             let px = img.get_pixel((f32::from(p.x) * scale) as u32, (f32::from(p.y) * scale) as u32);
-            Some((px[0] as u32) << 16 | (px[1] as u32) << 8 | px[2] as u32)
+            Some(u32::from(px[0]) << 16 | u32::from(px[1]) << 8 | u32::from(px[2]))
         })
     };
     let near = |a: u32, b: u32| {
@@ -4964,7 +4935,7 @@ async fn hunk_cases(r: &mut Runner<'_>, fx: &Fixture) {
     r.with(|ws, w, cx| {
         ws.sidebar_visible = true;
         ws.panel = Panel::Git;
-        ws.git.update(cx, |g, cx| g.refresh(cx));
+        ws.git.update(cx, super::super::panels::git::GitPanel::refresh);
         let _ = w;
         cx.notify();
     });
@@ -5072,7 +5043,7 @@ async fn hunk_cases(r: &mut Runner<'_>, fx: &Fixture) {
         git(&repo, &["checkout", "--", "hunks.txt"]);
         let with_new = original.replace("line 15\n", "line 15\nNEW A\nNEW B\n");
         write(&repo.join("hunks.txt"), &with_new);
-        r.with(|ws, _, cx| ws.git.update(cx, |g, cx| g.refresh(cx)));
+        r.with(|ws, _, cx| ws.git.update(cx, super::super::panels::git::GitPanel::refresh));
         r.wait_until(3000, |ws, cx| {
             ws.git
                 .read(cx)
@@ -5085,8 +5056,8 @@ async fn hunk_cases(r: &mut Runner<'_>, fx: &Fixture) {
         r.with(move |ws, _, cx| {
             ws.git.update(cx, |g, cx| {
                 g.expanded = None;
-                g.toggle_expand(&change, false, cx)
-            })
+                g.toggle_expand(&change, false, cx);
+            });
         });
         r.wait_until(3000, |ws, cx| {
             ws.git
@@ -5129,8 +5100,8 @@ async fn hunk_cases(r: &mut Runner<'_>, fx: &Fixture) {
         r.with(|ws, _, cx| {
             ws.git.update(cx, |g, cx| {
                 g.expanded = None;
-                g.refresh(cx)
-            })
+                g.refresh(cx);
+            });
         });
         r.wait_until(3000, |ws, cx| {
             ws.git
@@ -5177,8 +5148,8 @@ async fn hunk_cases(r: &mut Runner<'_>, fx: &Fixture) {
         r.with(|ws, _, cx| {
             ws.git.update(cx, |g, cx| {
                 g.expanded = None;
-                g.refresh(cx)
-            })
+                g.refresh(cx);
+            });
         });
         r.wait_until(3000, |ws, cx| {
             ws.git
@@ -5213,8 +5184,8 @@ async fn hunk_cases(r: &mut Runner<'_>, fx: &Fixture) {
         r.with(|ws, _, cx| {
             ws.git.update(cx, |g, cx| {
                 g.expanded = None;
-                g.refresh(cx)
-            })
+                g.refresh(cx);
+            });
         });
         r.wait_until(4000, |ws, cx| {
             ws.git
@@ -5248,8 +5219,8 @@ async fn hunk_cases(r: &mut Runner<'_>, fx: &Fixture) {
         r.with(|ws, _, cx| {
             ws.git.update(cx, |g, cx| {
                 g.expanded = None;
-                g.refresh(cx)
-            })
+                g.refresh(cx);
+            });
         });
         ensure!(truncated, "not truncated ({lines} lines)");
         ensure!(rendered < 100, "{rendered} diff rows built");
@@ -5282,8 +5253,7 @@ fn zombie_children() -> Vec<String> {
     let out = Command::new("ps")
         .args(["-ax", "-o", "ppid=,pid=,stat="])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
+        .map_or_default(|o| String::from_utf8_lossy(&o.stdout).to_string());
     out.lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
@@ -5474,8 +5444,7 @@ async fn process_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 let s = ws.search.read(cx);
                 s.indexes
                     .first()
-                    .map(|i| (i.is_indexing(), i.indexed_count()))
-                    .unwrap_or((false, 0))
+                    .map_or((false, 0), |i| (i.is_indexing(), i.indexed_count()))
             });
             r.wait_until(20_000, |ws, cx| {
                 ws.search.read(cx).indexes.first().is_some_and(|i| !i.is_indexing())
@@ -5486,8 +5455,7 @@ async fn process_cases(r: &mut Runner<'_>, fx: &Fixture) {
                     .read(cx)
                     .indexes
                     .first()
-                    .map(|i| i.indexed_count())
-                    .unwrap_or(0)
+                    .map_or(0, fs_tools::index::FileIndex::indexed_count)
             });
             let (p50, p95, max) = stalls;
             ensure!(total >= 200_000, "indexed only {total}");
@@ -5506,7 +5474,7 @@ async fn process_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 ws.search.update(cx, |s, cx| {
                     s.input.update(cx, |i, cx| i.set_value("needle_unique_x4", w, cx));
                     s.apply_query(cx);
-                })
+                });
             });
             let ok = r
                 .wait_until(1500, |ws, cx| {
@@ -5550,8 +5518,7 @@ async fn process_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 .read(cx)
                 .indexes
                 .first()
-                .map(|i| (i.indexed_count(), i.is_truncated()))
-                .unwrap_or((0, false))
+                .map_or((0, false), |i| (i.indexed_count(), i.is_truncated()))
         });
         let mut cfg = r.read(|ws, _| ws.config.clone());
         cfg.search.max_indexed_files = 300_000;
@@ -5580,7 +5547,7 @@ async fn lifecycle_phase(r: &mut Runner<'_>, out: &Path, wait_for_kill: bool) {
             Err(e) => eprintln!("lifecycle: {e}"),
         }
     }
-    let list: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
+    let list: Vec<String> = pids.iter().map(std::string::ToString::to_string).collect();
     std::fs::write(
         out.join(if wait_for_kill {
             "lifecycle_kill_pids"
@@ -5635,7 +5602,7 @@ async fn u6_heavy_search(r: &mut Runner<'_>, base: &Path, back_to: &str) {
                 e.case_sensitive = false;
                 e.query.update(cx, |i, cx| i.set_value("needle", w, cx));
                 e.schedule_search(Duration::ZERO, cx);
-            })
+            });
         });
         r.sleep(30).await;
         let running_at_start = r.read(|ws, cx| ws.explorer.read(cx).search.running);
@@ -5645,7 +5612,7 @@ async fn u6_heavy_search(r: &mut Runner<'_>, base: &Path, back_to: &str) {
             ws.explorer.update(cx, |e, cx| {
                 e.query.update(cx, |i, cx| i.set_value("", w, cx));
                 e.schedule_search(Duration::ZERO, cx);
-            })
+            });
         });
         let cancelled = r.wait_until(300, |ws, cx| !ws.explorer.read(cx).search.running).await;
         r.run(&format!("cd {back_to}"));
@@ -5666,7 +5633,7 @@ fn toml_with(cfg: &config::Config, extra: &str) -> String {
     // drop an existing [search] table so the snippet wins
     if let Some(i) = base.find("[search]") {
         let rest = &base[i + 8..];
-        let end = rest.find("\n[").map(|j| i + 8 + j + 1).unwrap_or(base.len());
+        let end = rest.find("\n[").map_or(base.len(), |j| i + 8 + j + 1);
         base.replace_range(i..end, "");
     }
     format!("{base}\n{extra}")
@@ -5676,19 +5643,16 @@ fn toml_with(cfg: &config::Config, extra: &str) -> String {
 
 /// (path, preview) of each file tab of cell `idx`, and the visible tab.
 fn cell_tabs(ws: &Workspace, cx: &App, idx: usize) -> (Vec<(PathBuf, bool)>, Option<usize>) {
-    ws.cells
-        .get(idx)
-        .map(|c| {
-            let c = c.read(cx);
-            (
-                c.tabs()
-                    .iter()
-                    .map(|t| (t.viewer.read(cx).path().to_path_buf(), t.preview))
-                    .collect(),
-                c.visible_tab(),
-            )
-        })
-        .unwrap_or_default()
+    ws.cells.get(idx).map_or_default(|c| {
+        let c = c.read(cx);
+        (
+            c.tabs()
+                .iter()
+                .map(|t| (t.viewer.read(cx).path().to_path_buf(), t.preview))
+                .collect(),
+            c.visible_tab(),
+        )
+    })
 }
 
 fn visible_viewer(ws: &Workspace, cx: &App, idx: usize) -> Option<Entity<crate::viewer::FileViewer>> {
@@ -5732,7 +5696,7 @@ impl Runner<'_> {
             ws.explorer.update(cx, |e, cx| {
                 e.tree_scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
                 cx.notify();
-            })
+            });
         });
         self.next_frame().await;
         self.next_frame().await;
@@ -5808,7 +5772,7 @@ impl Runner<'_> {
             for y in y0..y1.min(img.height()) {
                 for x in x0..x1.min(img.width()) {
                     let p = img.get_pixel(x, y);
-                    let c = (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32;
+                    let c = u32::from(p[0]) << 16 | u32::from(p[1]) << 8 | u32::from(p[2]);
                     if q(c) != q(bg) {
                         *counts.entry(q(c)).or_default() += 1;
                     }
@@ -5934,11 +5898,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
             let tabs = r.read(|ws, cx| cell_tabs(ws, cx, 0));
             ensure!(ok.is_some(), "no preview loaded: {tabs:?}");
             ensure!(tabs == (vec![(readme.clone(), true)], Some(0)), "tabs {tabs:?}");
-            let text = r.read(|ws, cx| {
-                visible_viewer(ws, cx, 0)
-                    .map(|v| v.read(cx).text(cx))
-                    .unwrap_or_default()
-            });
+            let text = r.read(|ws, cx| visible_viewer(ws, cx, 0).map_or_default(|v| v.read(cx).text(cx)));
             ensure!(text == "hello needle\n", "viewer text {text:?}");
             ensure!(r.explorer_focused(), "focus left the explorer");
             ensure!(r.active() == Some(0), "active {:?}", r.active());
@@ -6069,7 +6029,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
             // 500 ms: wait until it is the repo.
             let rp = repo.clone();
             r.wait_until(3000, move |ws, cx| {
-                ws.terminals[1].read(cx).cwd().map(|p| p.as_path()) == Some(rp.as_path())
+                ws.terminals[1].read(cx).cwd().map(std::path::PathBuf::as_path) == Some(rp.as_path())
             })
             .await
             .ok_or("terminal 2 cwd never became the repo")?;
@@ -6107,7 +6067,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.run(&format!("cd {}", vdir.display()));
             let vd = vdir.clone();
             r.wait_until(3000, move |ws, cx| {
-                ws.terminals[1].read(cx).cwd().map(|p| p.as_path()) == Some(vd.as_path())
+                ws.terminals[1].read(cx).cwd().map(std::path::PathBuf::as_path) == Some(vd.as_path())
             })
             .await
             .ok_or("cd viewer dir")?;
@@ -6125,8 +6085,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.sleep(300).await;
             let (line, rows) = r.read(|ws, cx| {
                 visible_viewer(ws, cx, 1)
-                    .map(|v| (v.read(cx).cursor_line(cx), v.read(cx).visible_rows(cx)))
-                    .unwrap_or((0, None))
+                    .map_or((0, None), |v| (v.read(cx).cursor_line(cx), v.read(cx).visible_rows(cx)))
             });
             ensure!(line == 2499, "long.txt cursor line {line}");
             ensure!(
@@ -6139,7 +6098,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.run(&format!("cd {}", repo.display()));
             let rp = repo.clone();
             r.wait_until(3000, move |ws, cx| {
-                ws.terminals[1].read(cx).cwd().map(|p| p.as_path()) == Some(rp.as_path())
+                ws.terminals[1].read(cx).cwd().map(std::path::PathBuf::as_path) == Some(rp.as_path())
             })
             .await
             .ok_or("cd repo")?;
@@ -6270,13 +6229,8 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
             .await
             .ok_or("not loaded")?;
         r.sleep(700).await; // let FSEvents replay settle
-        let text_now = |r: &mut Runner<'_>| {
-            r.read(|ws, cx| {
-                visible_viewer(ws, cx, 0)
-                    .map(|v| v.read(cx).text(cx))
-                    .unwrap_or_default()
-            })
-        };
+        let text_now =
+            |r: &mut Runner<'_>| r.read(|ws, cx| visible_viewer(ws, cx, 0).map_or_default(|v| v.read(cx).text(cx)));
         std::fs::write(&f, "two\n").unwrap();
         let ok = r
             .wait_until(3000, |ws, cx| {
@@ -6399,7 +6353,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 let scale = img.width() as f32 / f32::from(w.viewport_size().width);
                 let c = dot.center();
                 let p = img.get_pixel((f32::from(c.x) * scale) as u32, (f32::from(c.y) * scale) as u32);
-                Some((p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32)
+                Some(u32::from(p[0]) << 16 | u32::from(p[1]) << 8 | u32::from(p[2]))
             });
             let accent = terminal::colors::palette().accent;
             ensure!(colour == Some(accent), "dot pixel {colour:06x?}, accent {accent:06x}");
@@ -6427,7 +6381,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 let img = w.render_to_image().ok()?;
                 let scale = img.width() as f32 / f32::from(w.viewport_size().width);
                 let px = img.get_pixel((f32::from(p.x) * scale) as u32, (f32::from(p.y) * scale) as u32);
-                Some((px[0] as u32) << 16 | (px[1] as u32) << 8 | px[2] as u32)
+                Some(u32::from(px[0]) << 16 | u32::from(px[1]) << 8 | u32::from(px[2]))
             })
         };
         let near = |a: u32, b: u32| {
@@ -6513,9 +6467,7 @@ async fn viewer_cases(r: &mut Runner<'_>, fx: &Fixture) {
             .await
             .ok_or("not loaded")?;
         let (load, truncated) = r.read(|ws, cx| {
-            visible_viewer(ws, cx, 0)
-                .map(|v| (v.read(cx).last_load, v.read(cx).is_truncated()))
-                .unwrap_or((None, false))
+            visible_viewer(ws, cx, 0).map_or((None, false), |v| (v.read(cx).last_load, v.read(cx).is_truncated()))
         });
         r.shot("VP2-60mb");
         let detail = format!("carga {load:?}, truncado={truncated}, bloqueo UI p50 {p50:?} p95 {p95:?} máx {max:?}");
@@ -6592,8 +6544,8 @@ async fn debounce_cases(r: &mut Runner<'_>, fx: &Fixture) {
             ws.search.update(cx, |s, cx| {
                 s.input.update(cx, |i, cx| i.set_value("", w, cx));
                 s.apply_query(cx);
-            })
-        })
+            });
+        });
     };
 
     // Palette open with its input focused and painted (text input needs it).
@@ -6690,8 +6642,8 @@ async fn debounce_cases(r: &mut Runner<'_>, fx: &Fixture) {
             ws.explorer.update(cx, |e, cx| {
                 e.query.update(cx, |i, cx| i.set_value("", w, cx));
                 e.schedule_search(Duration::ZERO, cx);
-            })
-        })
+            });
+        });
     };
     r.key("cmd-shift-f");
     r.next_frame().await;
@@ -6772,7 +6724,7 @@ async fn debounce_cases(r: &mut Runner<'_>, fx: &Fixture) {
             clear_content(r);
             r.with(|ws, w, cx| {
                 ws.explorer
-                    .update(cx, |e, cx| e.query.update(cx, |i, cx| i.set_value("keep_me", w, cx)))
+                    .update(cx, |e, cx| e.query.update(cx, |i, cx| i.set_value("keep_me", w, cx)));
             });
             r.key("cmd-1");
             r.run("clear; printf 'aaaa1111\\nbbbb2222\\n'");
@@ -6828,7 +6780,7 @@ impl Runner<'_> {
             let img = w.render_to_image().ok()?;
             let scale = img.width() as f32 / f32::from(w.viewport_size().width);
             let px = img.get_pixel((f32::from(p.x) * scale) as u32, (f32::from(p.y) * scale) as u32);
-            Some((px[0] as u32) << 16 | (px[1] as u32) << 8 | px[2] as u32)
+            Some(u32::from(px[0]) << 16 | u32::from(px[1]) << 8 | u32::from(px[2]))
         })
     }
 
@@ -6846,7 +6798,7 @@ impl Runner<'_> {
         while self.n_terms() > k {
             self.with(|ws, w, cx| {
                 let last = ws.terminals.len() - 1;
-                ws.close_terminal_at(last, w, cx)
+                ws.close_terminal_at(last, w, cx);
             });
         }
         while self.n_terms() < k {
@@ -6885,8 +6837,7 @@ fn pgrep(pattern: &str) -> Vec<i32> {
     let out = Command::new("pgrep")
         .args(["-f", pattern])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
+        .map_or_default(|o| String::from_utf8_lossy(&o.stdout).to_string());
     out.lines().filter_map(|l| l.trim().parse().ok()).collect()
 }
 
@@ -6896,7 +6847,7 @@ async fn grid_cases(r: &mut Runner<'_>, fx: &Fixture) {
     use std::collections::VecDeque;
     r.close_all_tabs();
     if r.read(|ws, _| ws.palette_open) {
-        r.with(|ws, w, cx| ws.close_palette(w, cx));
+        r.with(super::Workspace::close_palette);
     }
     r.with(|ws, _, cx| {
         ws.zoomed = false;
@@ -6906,7 +6857,7 @@ async fn grid_cases(r: &mut Runner<'_>, fx: &Fixture) {
     let n0 = r.n_terms();
     let home = fx.plain.clone();
     r.set_grid(3, 2);
-    r.with(|ws, w, cx| ws.cancel_shrink(w, cx));
+    r.with(super::Workspace::cancel_shrink);
     let dir_a = fx.base.join("grid-a");
     let dir_b = fx.base.join("grid-b");
     std::fs::create_dir_all(&dir_a).ok();
@@ -7035,7 +6986,7 @@ async fn grid_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.notices().len() > notices && last.as_ref().is_some_and(|(m, _)| m.contains("Grid full")),
             "notice {last:?}"
         );
-        Ok(last.map(|l| l.0).unwrap_or_default())
+        Ok(last.map_or_default(|l| l.0))
     });
 
     case!(
@@ -7143,8 +7094,7 @@ async fn grid_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 let d: Vec<(u64, Vec<String>)> = ws
                     .pending_shrink
                     .as_ref()
-                    .map(|p| p.doomed.iter().map(|d| (d.id, d.processes.clone())).collect())
-                    .unwrap_or_default();
+                    .map_or_default(|p| p.doomed.iter().map(|d| (d.id, d.processes.clone())).collect());
                 (
                     d,
                     ws.config.grid.max_cols,
@@ -7222,7 +7172,7 @@ async fn grid_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.set_grid(2, 2);
             r.next_frame().await;
             r.next_frame().await;
-            let doomed = r.read(|ws, _| ws.pending_shrink.as_ref().map(|p| p.doomed.clone()).unwrap_or_default());
+            let doomed = r.read(|ws, _| ws.pending_shrink.as_ref().map_or_default(|p| p.doomed.clone()));
             ensure!(doomed.len() == 2, "doomed {doomed:?}");
             ensure!(
                 doomed[1].processes == vec!["sleep".to_string()],
@@ -7234,7 +7184,7 @@ async fn grid_cases(r: &mut Runner<'_>, fx: &Fixture) {
     );
 
     case!(r, "K4", "Job en segundo plano (sleep &) también se detecta", {
-        let doomed = r.read(|ws, _| ws.pending_shrink.as_ref().map(|p| p.doomed.clone()).unwrap_or_default());
+        let doomed = r.read(|ws, _| ws.pending_shrink.as_ref().map_or_default(|p| p.doomed.clone()));
         ensure!(
             doomed.first().is_some_and(|d| d.processes == vec!["sleep".to_string()]),
             "T5: {doomed:?}"
@@ -7333,9 +7283,9 @@ async fn grid_cases(r: &mut Runner<'_>, fx: &Fixture) {
 
     // Back to the grid and terminal count the rest of the run expects.
     r.set_picker(PickerStub::Auto);
-    r.with(|ws, w, cx| ws.cancel_shrink(w, cx));
+    r.with(super::Workspace::cancel_shrink);
     r.set_grid(original.grid.max_cols, original.grid.max_rows);
-    r.with(|ws, w, cx| ws.confirm_shrink(w, cx));
+    r.with(super::Workspace::confirm_shrink);
     r.set_count(n0.max(2), &home).await;
     r.key("cmd-1");
 }
@@ -7487,7 +7437,7 @@ async fn graph_cases(r: &mut Runner<'_>, fx: &Fixture) {
     let repo = graph_repo(&fx.base);
     r.close_all_tabs();
     if r.read(|ws, _| ws.palette_open) {
-        r.with(|ws, w, cx| ws.close_palette(w, cx));
+        r.with(super::Workspace::close_palette);
     }
     r.key("cmd-1");
     r.run(&format!("cd {}", repo.display()));
@@ -7564,8 +7514,7 @@ async fn graph_cases(r: &mut Runner<'_>, fx: &Fixture) {
         let chips = |s: &str| {
             log.iter()
                 .find(|c| c.summary == s)
-                .map(|c| c.refs.iter().map(|r| (r.name.clone(), r.kind)).collect::<Vec<_>>())
-                .unwrap_or_default()
+                .map_or_default(|c| c.refs.iter().map(|r| (r.name.clone(), r.kind)).collect::<Vec<_>>())
         };
         let want: Vec<(&str, Vec<(String, RefKind)>)> = vec![
             (
@@ -7638,7 +7587,7 @@ async fn graph_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 );
                 let bg = crate::theme::mantle();
                 let differs = |p: &image::Rgba<u8>| {
-                    let c = (p[0] as i32, p[1] as i32, p[2] as i32);
+                    let c = (i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
                     let b = ((bg >> 16 & 0xff) as i32, (bg >> 8 & 0xff) as i32, (bg & 0xff) as i32);
                     (c.0 - b.0).abs() + (c.1 - b.1).abs() + (c.2 - b.2).abs() > 60
                 };
@@ -7780,7 +7729,7 @@ async fn graph_cases(r: &mut Runner<'_>, fx: &Fixture) {
                     ws.git.update(cx, |g, cx| {
                         g.list_scroll.scroll_to_item(header + k, ScrollStrategy::Top);
                         cx.notify();
-                    })
+                    });
                 });
                 let f = r.next_frame().await;
                 gaps.push(f - last);
@@ -7825,7 +7774,7 @@ async fn ranking_cases(r: &mut Runner<'_>, fx: &Fixture) {
     }
     r.close_all_tabs();
     if r.read(|ws, _| ws.palette_open) {
-        r.with(|ws, w, cx| ws.close_palette(w, cx));
+        r.with(super::Workspace::close_palette);
     }
     r.key("cmd-1");
     r.run(&format!("cd {}", dir.display()));
@@ -7860,7 +7809,7 @@ async fn ranking_cases(r: &mut Runner<'_>, fx: &Fixture) {
                     .collect()
             });
             r.shot("S7-ranking");
-            r.with(|ws, w, cx| ws.close_palette(w, cx));
+            r.with(super::Workspace::close_palette);
             ensure!(ok.is_some(), "hits {hits:?}");
             let order: Vec<&str> = hits.iter().map(|h| h.0.as_str()).collect();
             let names = ["src/bus/event.rs", "src/ui/event_handler.rs", "docs/prevent.md"];
@@ -7935,7 +7884,7 @@ impl Runner<'_> {
     async fn start_anon_probe(&mut self, idx: usize, out: &Path) -> Result<(), String> {
         let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").map_err(|_| "GRIDTERM_E2E_IDE_PROBE not set")?;
         let port = self
-            .read(|ws, _| ws.ide.as_ref().map(|i| i.port()))
+            .read(|ws, _| ws.ide.as_ref().map(agents::ide::IdeServer::port))
             .ok_or("IDE server not running")?;
         let _ = std::fs::remove_file(out);
         let id = self.read(move |ws, cx| ws.terminals[idx].read(cx).id());
@@ -7954,8 +7903,7 @@ impl Runner<'_> {
             let ps = Command::new("/bin/ps")
                 .args(["-axo", "pid,ppid,stat,wchan,command"])
                 .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default();
+                .map_or_default(|o| String::from_utf8_lossy(&o.stdout).to_string());
             let probes: Vec<&str> = ps
                 .lines()
                 .filter(|l| l.contains("ide-probe") && l.contains(" - "))
@@ -7991,7 +7939,7 @@ async fn ide_cases(r: &mut Runner<'_>, fx: &Fixture) {
     write(&file_b, "fn b() {}\n");
     r.close_all_tabs();
     if r.read(|ws, _| ws.palette_open) {
-        r.with(|ws, w, cx| ws.close_palette(w, cx));
+        r.with(super::Workspace::close_palette);
     }
     r.with(|ws, _, cx| {
         ws.zoomed = false;
@@ -8008,7 +7956,7 @@ async fn ide_cases(r: &mut Runner<'_>, fx: &Fixture) {
         "Las terminales reciben CLAUDE_CODE_SSE_PORT = puerto del .lock",
         {
             let port = r
-                .read(|ws, _| ws.ide.as_ref().map(|i| i.port()))
+                .read(|ws, _| ws.ide.as_ref().map(agents::ide::IdeServer::port))
                 .ok_or("IDE server not running")?;
             let lock = r
                 .read(|ws, _| ws.ide.as_ref().map(|i| i.lock_path().to_path_buf()))
@@ -8172,7 +8120,7 @@ async fn ide_cases(r: &mut Runner<'_>, fx: &Fixture) {
             r.open_in(1, &file_a, None, false);
             r.sleep(300).await;
             let before = selections(&probe1).len();
-            r.with(|ws, _, cx| ws.cells[1].update(cx, |c, cx| c.close_visible_tab(cx)));
+            r.with(|ws, _, cx| ws.cells[1].update(cx, super::super::cell::CellView::close_visible_tab));
             let got = r.wait_selections(&probe1, before, 2000).await;
             let next = got.get(before).cloned().unwrap_or_default();
             ensure!(
@@ -8335,7 +8283,9 @@ async fn ide_cases(r: &mut Runner<'_>, fx: &Fixture) {
         "Cliente sin token desde fuera de las celdas: no recibe nada",
         {
             let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").unwrap();
-            let port = r.read(|ws, _| ws.ide.as_ref().map(|i| i.port())).unwrap();
+            let port = r
+                .read(|ws, _| ws.ide.as_ref().map(agents::ide::IdeServer::port))
+                .unwrap();
             let _ = std::fs::remove_file(&anon_out);
             let mut child = Command::new(&probe)
                 .args([port.to_string(), "-".into(), anon_out.display().to_string()])
@@ -8366,7 +8316,9 @@ async fn ide_cases(r: &mut Runner<'_>, fx: &Fixture) {
 
     case!(r, "IDE13", "Un token incorrecto se rechaza", {
         let probe = std::env::var("GRIDTERM_E2E_IDE_PROBE").unwrap();
-        let port = r.read(|ws, _| ws.ide.as_ref().map(|i| i.port())).unwrap();
+        let port = r
+            .read(|ws, _| ws.ide.as_ref().map(agents::ide::IdeServer::port))
+            .unwrap();
         let out = Command::new(&probe)
             .args([
                 port.to_string(),
@@ -8607,7 +8559,7 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
     write(&file_a, &(1..=20).map(|i| format!("line{i}\n")).collect::<String>());
     r.close_all_tabs();
     if r.read(|ws, _| ws.palette_open) {
-        r.with(|ws, w, cx| ws.close_palette(w, cx));
+        r.with(super::Workspace::close_palette);
     }
     r.with(|ws, _, cx| {
         ws.zoomed = false;
@@ -8645,9 +8597,7 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
                         .contains(&want)
                 })
                 .await;
-            let mode = std::fs::metadata(&socket)
-                .map(|m| m.permissions().mode() & 0o777)
-                .unwrap_or(0);
+            let mode = std::fs::metadata(&socket).map_or(0, |m| m.permissions().mode() & 0o777);
             ensure!(ok.is_some(), "shell env: {}", r.term_text(1));
             ensure!(mode == 0o600, "socket mode {mode:o}");
             Ok(format!("{} (0600)", socket.display()))
@@ -8668,7 +8618,7 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
             // A new shell (started after the marker exists).
             r.with(|ws, w, cx| {
                 let last = ws.terminals.len() - 1;
-                ws.close_terminal_at(last, w, cx)
+                ws.close_terminal_at(last, w, cx);
             });
             let d = fx.repo.clone();
             r.with(move |ws, w, cx| ws.open_terminal_in(Some(d), w, cx));
@@ -8725,8 +8675,7 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
             let names: Vec<String> = replies
                 .get(1)
                 .and_then(|r| r["result"]["tools"].as_array())
-                .map(|t| t.iter().filter_map(|t| t["name"].as_str().map(str::to_owned)).collect())
-                .unwrap_or_default();
+                .map_or_default(|t| t.iter().filter_map(|t| t["name"].as_str().map(str::to_owned)).collect());
             ensure!(
                 names == ["get_selection", "get_cell_context"],
                 "tools {names:?}; replies {replies:?}"
@@ -8758,7 +8707,7 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
             let replies = r
                 .mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_selection")])
                 .await?;
-            let (is_error, sel) = replies.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+            let (is_error, sel) = replies.get(1).map_or((true, serde_json::Value::Null), tool_text);
             ensure!(!is_error, "error: {sel}");
             ensure!(
                 sel["file"] == file_a.display().to_string()
@@ -8779,7 +8728,7 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
             let replies = r
                 .mcp_from_cell(0, &dir, &[init.clone(), mcp_call(2, "get_selection")])
                 .await?;
-            let (e0, cell1) = replies.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+            let (e0, cell1) = replies.get(1).map_or((true, serde_json::Value::Null), tool_text);
             let socket = r
                 .read(|ws, _| ws.agent_socket.as_ref().map(|s| s.path().to_path_buf()))
                 .ok_or("no socket")?;
@@ -8812,7 +8761,7 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
         let replies = r
             .mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_cell_context")])
             .await?;
-        let (is_error, c) = replies.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+        let (is_error, c) = replies.get(1).map_or((true, serde_json::Value::Null), tool_text);
         r.run("kill %1");
         let repo = fx.repo.display().to_string();
         ensure!(!is_error, "error: {c}");
@@ -8872,13 +8821,13 @@ async fn mcp_cases(r: &mut Runner<'_>, fx: &Fixture) {
             let off = r
                 .mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_selection")])
                 .await?;
-            let (off_err, off_text) = off.get(1).map(tool_text).unwrap_or((false, serde_json::Value::Null));
+            let (off_err, off_text) = off.get(1).map_or((false, serde_json::Value::Null), tool_text);
             cfg.agents.mcp = true;
             r.with(move |ws, w, cx| ws.apply_config(cfg, w, cx));
             let on = r
                 .mcp_from_cell(1, &dir, &[init.clone(), mcp_call(2, "get_selection")])
                 .await?;
-            let (on_err, on_text) = on.get(1).map(tool_text).unwrap_or((true, serde_json::Value::Null));
+            let (on_err, on_text) = on.get(1).map_or((true, serde_json::Value::Null), tool_text);
             ensure!(gone, "socket still exists after disabling");
             ensure!(off_err, "call while disabled: {off_text}");
             ensure!(
@@ -8907,8 +8856,7 @@ async fn agents_cases(r: &mut Runner<'_>, fx: &Fixture) {
         let claude_mcp = std::fs::read_to_string(format!("{home}/.claude.json"))
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .map(|v| v["mcpServers"].to_string())
-            .unwrap_or_default();
+            .map_or_default(|v| v["mcpServers"].to_string());
         let mut out = vec![("~/.claude.json mcpServers".to_string(), claude_mcp)];
         for f in [
             ".omp/agent/mcp.json",
@@ -8917,15 +8865,17 @@ async fn agents_cases(r: &mut Runner<'_>, fx: &Fixture) {
         ] {
             out.push((
                 format!("~/{f}"),
-                std::fs::read(format!("{home}/{f}"))
-                    .map(|b| {
+                std::fs::read(format!("{home}/{f}")).map_or_else(
+                    |_| "absent".into(),
+                    |b| {
                         format!(
                             "{} bytes, {:x}",
                             b.len(),
-                            b.iter().fold(0u64, |h, x| h.wrapping_mul(31).wrapping_add(*x as u64))
+                            b.iter()
+                                .fold(0u64, |h, x| h.wrapping_mul(31).wrapping_add(u64::from(*x)))
                         )
-                    })
-                    .unwrap_or_else(|_| "absent".into()),
+                    },
+                ),
             ));
         }
         out
@@ -9060,8 +9010,7 @@ async fn agents_cases(r: &mut Runner<'_>, fx: &Fixture) {
                 ensure!(shown, "selection not shown by opencode: {text}");
                 let around = text
                     .find("README")
-                    .map(|i| text[i.saturating_sub(30)..(i + 40).min(text.len())].trim().to_string())
-                    .unwrap_or_default();
+                    .map_or_default(|i| text[i.saturating_sub(30)..(i + 40).min(text.len())].trim().to_string());
                 r.key("cmd-shift-enter");
                 Ok(format!(
                     "conectado a su celda en {:?}; con 1 línea seleccionada ({cols} columnas) muestra «{around}»",

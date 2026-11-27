@@ -148,7 +148,7 @@ impl ExplorerPanel {
         if root == self.root {
             return;
         }
-        self.root = root.clone();
+        self.root.clone_from(&root);
         self.children.clear();
         self.expanded.clear();
         self.loading.clear();
@@ -578,7 +578,7 @@ impl ExplorerPanel {
             .p_2()
             .child(div().flex_1().child(Input::new(&self.query).cleanable(true)))
             .child(toggle("case", IconName::CaseSensitive, self.case_sensitive, |e| {
-                e.case_sensitive = !e.case_sensitive
+                e.case_sensitive = !e.case_sensitive;
             }))
             .child(toggle("regex", IconName::Regex, self.regex, |e| e.regex = !e.regex))
     }
@@ -588,8 +588,7 @@ impl ExplorerPanel {
             .root
             .as_ref()
             .and_then(|r| r.file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().to_string());
         div()
             .flex()
             .flex_row()
@@ -617,7 +616,7 @@ impl ExplorerPanel {
                                 o.respect_gitignore = !o.show_hidden;
                             },
                             cx,
-                        )
+                        );
                     }),
                 )
                 .tooltip(|w, cx| {
@@ -741,7 +740,7 @@ impl ExplorerPanel {
                 div()
                     .flex()
                     .invisible()
-                    .group_hover(group, |s| s.visible())
+                    .group_hover(group, gpui_kit::Styled::visible)
                     .child(
                         icon_button(
                             ("insert", ix),
@@ -769,7 +768,7 @@ impl ExplorerPanel {
                             ("copy", ix),
                             IconName::Copy,
                             cx.listener(move |_, _: &ClickEvent, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(p3.display().to_string()))
+                                cx.write_to_clipboard(ClipboardItem::new_string(p3.display().to_string()));
                             }),
                         )
                         .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Copy path").build(w, cx)),
@@ -777,7 +776,7 @@ impl ExplorerPanel {
                     .child({
                         let p4 = entry.path.clone();
                         icon_button(("finder", ix), IconName::ExternalLink, move |_, _, _| {
-                            reveal_in_finder(&p4)
+                            reveal_in_finder(&p4);
                         })
                         .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Reveal in Finder").build(w, cx))
                     }),
@@ -1004,7 +1003,7 @@ impl ExplorerPanel {
                                 path: p.clone(),
                                 line: Some(line_no),
                                 preview: e.click_count() < 2,
-                            })
+                            });
                         })
                     })
                     .child(

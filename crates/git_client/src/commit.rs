@@ -78,8 +78,7 @@ impl GitRepo {
                 .new_file()
                 .path()
                 .or(delta.old_file().path())
-                .map(PathBuf::from)
-                .unwrap_or_default();
+                .map_or_default(PathBuf::from);
             let old_path = matches!(status, 'R' | 'C')
                 .then(|| delta.old_file().path().map(PathBuf::from))
                 .flatten();
