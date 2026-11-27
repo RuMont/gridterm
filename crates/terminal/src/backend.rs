@@ -238,7 +238,8 @@ pub fn process_alive(pid: i32) -> bool {
     // SAFETY: zeroed POD buffer of the right size.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
-    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+    // SAFETY: `info` is a properly sized, writable proc_bsdinfo and `size` matches it.
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
     // SZOMB = 5
     n == size && info.pbi_status != 5
 }
@@ -283,10 +284,15 @@ pub fn utf8_locale() -> &'static str {
             .args(["read", "-g", "AppleLocale"])
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
+            .map_or_default(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
         // "es_ES@calendar=gregorian" → "es_ES"
-        let base: String = apple.split('@').next().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        let base: String = apple
+            .split('@')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
         let valid = base.len() == 5 && base.as_bytes()[2] == b'_';
         format!("{}.UTF-8", if valid { base.as_str() } else { "en_US" })
     })
@@ -294,7 +300,10 @@ pub fn utf8_locale() -> &'static str {
 
 /// Terminal options derived from the user settings.
 pub fn term_config(scrollback: usize, cursor_blink: bool) -> TermConfig {
-    let mut config = TermConfig { scrolling_history: scrollback, ..TermConfig::default() };
+    let mut config = TermConfig {
+        scrolling_history: scrollback,
+        ..TermConfig::default()
+    };
     config.default_cursor_style.blinking = cursor_blink;
     config
 }

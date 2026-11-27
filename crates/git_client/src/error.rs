@@ -73,12 +73,8 @@ pub fn friendly_message(err: &anyhow::Error) -> String {
         GitErrorKind::NonFastForward => {
             "Push rejected: the remote has commits you don't have. Pull first, then push again."
         }
-        GitErrorKind::AuthFailed => {
-            "Authentication failed. Check your SSH key or credentials for this remote."
-        }
-        GitErrorKind::Network => {
-            "Could not reach the remote. Check your connection or the remote URL."
-        }
+        GitErrorKind::AuthFailed => "Authentication failed. Check your SSH key or credentials for this remote.",
+        GitErrorKind::Network => "Could not reach the remote. Check your connection or the remote URL.",
         GitErrorKind::NoUpstream => "This branch has no upstream yet.",
         GitErrorKind::NoRemote => "No remote is configured for this repository. Add one first.",
         GitErrorKind::Conflict => {
@@ -108,8 +104,7 @@ pub(crate) fn git_detail(err: &anyhow::Error) -> String {
 }
 
 fn find_git_error(err: &anyhow::Error) -> Option<&GitError> {
-    err.chain()
-        .find_map(|cause| cause.downcast_ref::<GitError>())
+    err.chain().find_map(|cause| cause.downcast_ref::<GitError>())
 }
 
 /// Classifies git output (usually stderr) by well-known message patterns.
@@ -258,8 +253,8 @@ mod tests {
 
     #[test]
     fn typed_errors_win_and_survive_context() {
-        let err = anyhow::Error::new(GitError::new(GitErrorKind::Cancelled, "git push cancelled"))
-            .context("while syncing");
+        let err =
+            anyhow::Error::new(GitError::new(GitErrorKind::Cancelled, "git push cancelled")).context("while syncing");
         assert_eq!(error_kind(&err), GitErrorKind::Cancelled);
         assert_eq!(friendly_message(&err), "Cancelled.");
     }
@@ -289,8 +284,7 @@ mod tests {
         assert!(msg.starts_with("Xxx"), "{msg}");
 
         let err = anyhow::Error::new(
-            GitError::new(GitErrorKind::Other, "git rev-parse failed")
-                .with_detail("fatal: bad revision 'xyz'"),
+            GitError::new(GitErrorKind::Other, "git rev-parse failed").with_detail("fatal: bad revision 'xyz'"),
         );
         assert_eq!(friendly_message(&err), "Bad revision 'xyz'");
     }
@@ -310,10 +304,7 @@ mod tests {
         ] {
             let err = anyhow::Error::new(GitError::new(kind, "m"));
             let msg = friendly_message(&err);
-            assert!(
-                !msg.is_empty() && msg.chars().count() <= 160,
-                "{kind:?}: {msg}"
-            );
+            assert!(!msg.is_empty() && msg.chars().count() <= 160, "{kind:?}: {msg}");
         }
     }
 }

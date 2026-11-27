@@ -55,8 +55,8 @@ impl RepoWatcher {
     /// (never `*.lock`); in the working tree, creations, removals, renames
     /// and content changes of paths git does not ignore.
     pub fn new(root: &Path, on_change: impl Fn() + Send + Sync + 'static) -> Result<Self> {
-        let repo = Repository::open(root)
-            .with_context(|| format!("failed to open git repository at {}", root.display()))?;
+        let repo =
+            Repository::open(root).with_context(|| format!("failed to open git repository at {}", root.display()))?;
         let workdir = repo
             .workdir()
             .ok_or_else(|| anyhow!("{} is a bare repository", root.display()))?;
@@ -115,12 +115,7 @@ impl Drop for RepoWatcher {
     }
 }
 
-fn run(
-    rx: crossbeam_channel::Receiver<Msg>,
-    mut filter: Filter,
-    stopped: &AtomicBool,
-    on_change: impl Fn(),
-) {
+fn run(rx: crossbeam_channel::Receiver<Msg>, mut filter: Filter, stopped: &AtomicBool, on_change: impl Fn()) {
     filter.open_repo();
     // (first, last) relevant event of the pending burst.
     let mut burst: Option<(Instant, Instant)> = None;
@@ -245,11 +240,7 @@ impl Filter {
         // libgit2 stats the path to apply directory-only patterns such as
         // `target/`; a removed directory no longer exists, so mark it as a
         // directory with a trailing slash.
-        let probe = if removed_dir {
-            rel.join("")
-        } else {
-            rel.to_path_buf()
-        };
+        let probe = if removed_dir { rel.join("") } else { rel.to_path_buf() };
         repo.is_path_ignored(&probe).unwrap_or(false)
     }
 
@@ -278,9 +269,7 @@ fn git_path_relevant(rel: &Path) -> bool {
     }
     let mut components = rel.components();
     match (components.next(), components.next()) {
-        (Some(Component::Normal(first)), None) => {
-            first == "refs" || GIT_FILES.iter().any(|f| first == *f)
-        }
+        (Some(Component::Normal(first)), None) => first == "refs" || GIT_FILES.iter().any(|f| first == *f),
         (Some(Component::Normal(first)), Some(_)) => first == "refs",
         _ => false,
     }
@@ -301,8 +290,7 @@ mod tests {
         let mut filter = Filter::new(root.clone(), vec![root.join(".git")]);
         filter.open_repo();
 
-        let ignored =
-            |f: &mut Filter, p: &str, removed_dir: bool| f.is_ignored(Path::new(p), removed_dir);
+        let ignored = |f: &mut Filter, p: &str, removed_dir: bool| f.is_ignored(Path::new(p), removed_dir);
         assert!(ignored(&mut filter, "target", false));
         assert!(ignored(&mut filter, "target/debug/x.o", false));
         assert!(ignored(&mut filter, "target/new/deep/x.o", false));

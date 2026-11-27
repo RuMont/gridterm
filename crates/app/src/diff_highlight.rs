@@ -51,7 +51,9 @@ impl SideHighlights {
     }
 
     fn line(&self, number: Option<u32>) -> &[(Range<usize>, &'static str)] {
-        number.and_then(|n| self.0.get((n as usize).checked_sub(1)?)).map_or(&[], Vec::as_slice)
+        number
+            .and_then(|n| self.0.get((n as usize).checked_sub(1)?))
+            .map_or(&[], Vec::as_slice)
     }
 }
 
@@ -67,7 +69,10 @@ impl DiffHighlights {
     /// language of `path`. Off the UI thread: it parses whole files.
     pub fn compute(path: &Path, old: Option<&str>, new: Option<&str>) -> Self {
         let language = crate::viewer::language_for(path);
-        Self { old: old.map(|t| SideHighlights::of(&language, t)), new: new.map(|t| SideHighlights::of(&language, t)) }
+        Self {
+            old: old.map(|t| SideHighlights::of(&language, t)),
+            new: new.map(|t| SideHighlights::of(&language, t)),
+        }
     }
 
     /// Highlight names for `line` (byte ranges within its text).
@@ -114,7 +119,13 @@ mod tests {
     use super::DiffHighlights;
 
     fn line(kind: LineKind, old: Option<u32>, new: Option<u32>, text: &str) -> DiffLine {
-        DiffLine { kind, old_lineno: old, new_lineno: new, text: text.into(), no_newline_at_eof: false }
+        DiffLine {
+            kind,
+            old_lineno: old,
+            new_lineno: new,
+            text: text.into(),
+            no_newline_at_eof: false,
+        }
     }
 
     #[test]
@@ -122,17 +133,36 @@ mod tests {
         let old = "fn a() {}\n/* start\nstill comment */\nlet x = 1;\n";
         let new = "fn a() {}\n/* start\nstill comment */\nlet x = \"two\";\n";
         let h = DiffHighlights::compute(Path::new("x.rs"), Some(old), Some(new));
-        let names = |l: &DiffLine| h.for_line(l).iter().map(|(r, n)| (*n, l.text[r.clone()].to_string())).collect::<Vec<_>>();
+        let names = |l: &DiffLine| {
+            h.for_line(l)
+                .iter()
+                .map(|(r, n)| (*n, l.text[r.clone()].to_string()))
+                .collect::<Vec<_>>()
+        };
         // A line in the middle of a block comment is a comment, though the
         // hunk would not show where it starts.
         let mid = line(LineKind::Context, Some(3), Some(3), "still comment */");
-        assert!(names(&mid).iter().any(|(n, t)| *n == "comment" && t.contains("still")), "{:?}", names(&mid));
+        assert!(
+            names(&mid).iter().any(|(n, t)| *n == "comment" && t.contains("still")),
+            "{:?}",
+            names(&mid)
+        );
         let added = line(LineKind::Added, None, Some(4), "let x = \"two\";");
-        assert!(names(&added).contains(&("string", "\"two\"".into())), "{:?}", names(&added));
+        assert!(
+            names(&added).contains(&("string", "\"two\"".into())),
+            "{:?}",
+            names(&added)
+        );
         let removed = line(LineKind::Removed, Some(4), None, "let x = 1;");
-        assert!(names(&removed).iter().any(|(n, t)| *n == "number" && t == "1"), "{:?}", names(&removed));
+        assert!(
+            names(&removed).iter().any(|(n, t)| *n == "number" && t == "1"),
+            "{:?}",
+            names(&removed)
+        );
         // Missing side or line: nothing.
-        assert!(DiffHighlights::compute(Path::new("x.rs"), None, Some(new)).for_line(&removed).is_empty());
+        assert!(DiffHighlights::compute(Path::new("x.rs"), None, Some(new))
+            .for_line(&removed)
+            .is_empty());
         assert!(h.for_line(&line(LineKind::Added, None, Some(99), "")).is_empty());
     }
 }

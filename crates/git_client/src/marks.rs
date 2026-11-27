@@ -51,17 +51,31 @@ impl GitRepo {
         let diff = repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut options))?;
         let mut changes = Vec::new();
         for idx in 0..diff.deltas().len() {
-            let Some(patch) = Patch::from_diff(&diff, idx)? else { continue };
+            let Some(patch) = Patch::from_diff(&diff, idx)? else {
+                continue;
+            };
             if patch.delta().flags().is_binary() {
                 continue;
             }
             for h in 0..patch.num_hunks() {
                 let (hunk, _) = patch.hunk(h)?;
                 changes.push(match (hunk.old_lines(), hunk.new_lines()) {
-                    (0, n) => LineChange { kind: LineChangeKind::Added, start: hunk.new_start(), count: n },
+                    (0, n) => LineChange {
+                        kind: LineChangeKind::Added,
+                        start: hunk.new_start(),
+                        count: n,
+                    },
                     // Without context, a removal's new_start is the line above it.
-                    (_, 0) => LineChange { kind: LineChangeKind::Deleted, start: hunk.new_start() + 1, count: 0 },
-                    (_, n) => LineChange { kind: LineChangeKind::Modified, start: hunk.new_start(), count: n },
+                    (_, 0) => LineChange {
+                        kind: LineChangeKind::Deleted,
+                        start: hunk.new_start() + 1,
+                        count: 0,
+                    },
+                    (_, n) => LineChange {
+                        kind: LineChangeKind::Modified,
+                        start: hunk.new_start(),
+                        count: n,
+                    },
                 });
             }
         }

@@ -44,8 +44,11 @@ type Highlights = Vec<(Range<usize>, &'static str)>;
 /// end up with no highlights.
 pub fn factory() -> InputHighlighterFactory {
     Rc::new(|language| {
-        Some(Box::new(BackgroundHighlighter { language: language.to_owned().into(), highlights: Rc::default(), parse_task: None })
-            as Box<dyn InputHighlighter>)
+        Some(Box::new(BackgroundHighlighter {
+            language: language.to_owned().into(),
+            highlights: Rc::default(),
+            parse_task: None,
+        }) as Box<dyn InputHighlighter>)
     })
 }
 
@@ -60,7 +63,9 @@ fn find_syntax(language: &str) -> Option<&'static SyntaxReference> {
 
 /// Highlight names for `text` (ordered, non-overlapping).
 pub fn parse(language: &str, text: &str) -> Highlights {
-    let Some(syntax) = find_syntax(language) else { return Vec::new() };
+    let Some(syntax) = find_syntax(language) else {
+        return Vec::new();
+    };
     let syntaxes = &*SYNTAXES;
     let mut parser = ParseState::new(syntax);
     let mut scopes = ScopeStack::new();
@@ -71,7 +76,11 @@ pub fn parse(language: &str, text: &str) -> Highlights {
             return;
         }
         // The innermost scope that names something wins.
-        let name = scopes.scopes.iter().rev().find_map(|s| *names.entry(*s).or_insert_with(|| semantic_name(*s)));
+        let name = scopes
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|s| *names.entry(*s).or_insert_with(|| semantic_name(*s)));
         if let Some(name) = name {
             match highlights.last_mut() {
                 Some((last, last_name)) if last.end == range.start && *last_name == name => last.end = range.end,
@@ -132,10 +141,31 @@ fn semantic_name(scope: Scope) -> Option<&'static str> {
         "keyword"
     } else if is("storage.type") {
         // `fn`, `class`, `let` are declarations; `int`, `bool` are types.
-        const DECL: [&str; 13] =
-            ["class", "enum", "function", "impl", "interface", "module", "namespace", "struct", "trait", "type", "let", "var", "const"];
-        if DECL.iter().any(|w| scope.contains(w)) { "keyword" } else { "type" }
-    } else if is("entity.name.function") || is("support.function") || is("variable.function") || is("meta.function-call") {
+        const DECL: [&str; 13] = [
+            "class",
+            "enum",
+            "function",
+            "impl",
+            "interface",
+            "module",
+            "namespace",
+            "struct",
+            "trait",
+            "type",
+            "let",
+            "var",
+            "const",
+        ];
+        if DECL.iter().any(|w| scope.contains(w)) {
+            "keyword"
+        } else {
+            "type"
+        }
+    } else if is("entity.name.function")
+        || is("support.function")
+        || is("variable.function")
+        || is("meta.function-call")
+    {
         "function"
     } else if is("entity.name.type")
         || is("entity.name.class")
@@ -158,7 +188,11 @@ fn semantic_name(scope: Scope) -> Option<&'static str> {
         "title"
     } else if is("variable.language") {
         "variable.special"
-    } else if is("variable.other.member") || is("variable.other.property") || is("support.variable.property") || is("meta.mapping.key") {
+    } else if is("variable.other.member")
+        || is("variable.other.property")
+        || is("support.variable.property")
+        || is("meta.mapping.key")
+    {
         "property"
     } else if is("variable") {
         "variable"
@@ -195,7 +229,14 @@ impl InputHighlighter for BackgroundHighlighter {
         self.language.clone()
     }
 
-    fn update(&mut self, _edit: Option<InputEdit>, text: &Rope, _folding: bool, window: &mut Window, cx: &mut Context<EditorState>) {
+    fn update(
+        &mut self,
+        _edit: Option<InputEdit>,
+        text: &Rope,
+        _folding: bool,
+        window: &mut Window,
+        cx: &mut Context<EditorState>,
+    ) {
         // The viewer is read-only: an update is a whole new text (load or
         // reload). Old highlights would be misplaced, drop them.
         self.highlights.borrow_mut().clear();
@@ -204,13 +245,20 @@ impl InputHighlighter for BackgroundHighlighter {
         let highlights = self.highlights.clone();
         // Replacing the task cancels a parse of an older text.
         self.parse_task = Some(cx.spawn_in(window, async move |entity, cx| {
-            let parsed = cx.background_executor().spawn(async move { parse(&language, &text.to_string()) }).await;
+            let parsed = cx
+                .background_executor()
+                .spawn(async move { parse(&language, &text.to_string()) })
+                .await;
             *highlights.borrow_mut() = parsed;
             let _ = entity.update(cx, |_, cx| cx.notify());
         }));
     }
 
-    fn styles(&self, range: &Range<usize>, resolver: &dyn HighlightStyleResolver) -> Vec<(Range<usize>, HighlightStyle)> {
+    fn styles(
+        &self,
+        range: &Range<usize>,
+        resolver: &dyn HighlightStyleResolver,
+    ) -> Vec<(Range<usize>, HighlightStyle)> {
         let highlights = self.highlights.borrow();
         let first = highlights.partition_point(|(h, _)| h.end <= range.start);
         let mut runs = Vec::new();
@@ -249,7 +297,10 @@ mod tests {
         let code = "fn main() {\n    let s = \"hi\"; // note\n}\n";
         let got: Vec<(&str, &str)> = parse("rs", code).into_iter().map(|(r, n)| (n, &code[r])).collect();
         assert!(got.contains(&("string", "\"hi\"")), "{got:?}");
-        assert!(got.iter().any(|(n, t)| *n == "comment" && t.contains("note")), "{got:?}");
+        assert!(
+            got.iter().any(|(n, t)| *n == "comment" && t.contains("note")),
+            "{got:?}"
+        );
         assert!(got.iter().any(|(n, t)| *n == "keyword" && *t == "fn"), "{got:?}");
         assert!(parse("no-such-language", code).is_empty());
     }
@@ -258,7 +309,17 @@ mod tests {
     fn module_and_variant_extensions_are_highlighted() {
         use std::path::Path;
         let lang = |p: &str| crate::viewer::language_for(Path::new(p));
-        for file in ["a.mjs", "b.cjs", "c.jsx", "d.jsonc", "e.json5", "f.mdx", "Cargo.lock", ".editorconfig", "g.MJS"] {
+        for file in [
+            "a.mjs",
+            "b.cjs",
+            "c.jsx",
+            "d.jsonc",
+            "e.json5",
+            "f.mdx",
+            "Cargo.lock",
+            ".editorconfig",
+            "g.MJS",
+        ] {
             assert!(super::find_syntax(&lang(file)).is_some(), "{file} → {}", lang(file));
         }
         let js = "export const x = \"s\"; // c\n";
@@ -266,4 +327,3 @@ mod tests {
         assert!(got.contains(&"string") && got.contains(&"comment"), "{got:?}");
     }
 }
-

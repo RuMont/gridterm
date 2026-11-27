@@ -29,7 +29,10 @@ pub struct AgentsConfig {
 
 impl Default for AgentsConfig {
     fn default() -> Self {
-        Self { claude_ide: true, mcp: true }
+        Self {
+            claude_ide: true,
+            mcp: true,
+        }
     }
 }
 
@@ -44,7 +47,10 @@ pub struct SearchConfig {
 
 impl Default for SearchConfig {
     fn default() -> Self {
-        Self { max_content_results: 2_000, max_indexed_files: 300_000 }
+        Self {
+            max_content_results: 2_000,
+            max_indexed_files: 300_000,
+        }
     }
 }
 
@@ -108,7 +114,10 @@ pub struct GitConfig {
 
 impl Default for GridConfig {
     fn default() -> Self {
-        Self { max_cols: 3, max_rows: 2 }
+        Self {
+            max_cols: 3,
+            max_rows: 2,
+        }
     }
 }
 
@@ -131,13 +140,21 @@ impl Default for TerminalConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { sidebar_width: 300.0, sidebar_visible: true, theme: ThemeMode::Dark, sidebar_side: SidebarSide::Left }
+        Self {
+            sidebar_width: 300.0,
+            sidebar_visible: true,
+            theme: ThemeMode::Dark,
+            sidebar_side: SidebarSide::Left,
+        }
     }
 }
 
 impl Default for GitConfig {
     fn default() -> Self {
-        Self { pull_rebase: false, log_limit: 200 }
+        Self {
+            pull_rebase: false,
+            log_limit: 200,
+        }
     }
 }
 
@@ -157,7 +174,9 @@ impl Config {
 
     /// Loads the config file, falling back to defaults on any error.
     pub fn load() -> Self {
-        let Some(path) = Self::path() else { return Self::default() };
+        let Some(path) = Self::path() else {
+            return Self::default();
+        };
         match std::fs::read_to_string(&path) {
             Ok(text) => Self::parse(&text).unwrap_or_else(|e| {
                 log::warn!("invalid config {}: {e}", path.display());
@@ -210,7 +229,9 @@ impl Keymap {
 
     /// Loads the overrides, falling back to none on any error.
     pub fn load() -> Self {
-        let Some(path) = Self::path() else { return Self::default() };
+        let Some(path) = Self::path() else {
+            return Self::default();
+        };
         match std::fs::read_to_string(&path) {
             Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
                 log::warn!("invalid keymap {}: {e}", path.display());

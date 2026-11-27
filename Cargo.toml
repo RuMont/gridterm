@@ -4,8 +4,9 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2021"
-version = "0.5.0"
-license = "MIT OR Apache-2.0"
+version = "0.6.0"
+license = "MIT-0"
+publish = false
 
 [workspace.dependencies]
 gpui-kit = { version = "=0.11.0", default-features = false, features = ["component", "assets", "syntect"] }
@@ -34,6 +35,31 @@ config = { path = "crates/config" }
 terminal = { path = "crates/terminal" }
 git_client = { path = "crates/git_client" }
 fs_tools = { path = "crates/fs_tools" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+# Never committed: debugging and placeholder macros.
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Diagnostics go through `log`; eprintln! is allowed for CLI messages.
+print_stdout = "warn"
+mem_forget = "warn"
+# Correctness and FFI.
+float_cmp = "warn"
+borrow_as_ptr = "warn"
+cast_lossless = "warn"
+# Needless work.
+redundant_clone = "warn"
+assigning_clones = "warn"
+# Readability (machine-fixable: cargo clippy --fix).
+map_unwrap_or = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
 
 [profile.dev]
 opt-level = 1

@@ -14,8 +14,9 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock};
 
+use parking_lot::Mutex;
 use regex::Regex;
 
 /// Where a symbol is declared: file and 0-based line.
@@ -57,8 +58,18 @@ pub fn word_at(text: &str, offset: usize) -> Option<Range<usize>> {
     if !text.is_char_boundary(offset) {
         return None;
     }
-    let start = text[..offset].char_indices().rev().take_while(|(_, c)| is_ident(*c)).last().map_or(offset, |(i, _)| i);
-    let end = offset + text[offset..].char_indices().take_while(|(_, c)| is_ident(*c)).last().map_or(0, |(i, c)| i + c.len_utf8());
+    let start = text[..offset]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_ident(*c))
+        .last()
+        .map_or(offset, |(i, _)| i);
+    let end = offset
+        + text[offset..]
+            .char_indices()
+            .take_while(|(_, c)| is_ident(*c))
+            .last()
+            .map_or(0, |(i, c)| i + c.len_utf8());
     let word = &text[start..end];
     (!word.is_empty() && !word.starts_with(|c: char| c.is_ascii_digit())).then_some(start..end)
 }
@@ -77,15 +88,18 @@ pub fn find(file: &Path, text: &str, offset: usize) -> Option<Target> {
     let lang = lang_of(file);
 
     let via_import = match lang {
-        Lang::Ts => ts_via_import(file, text, range.clone()),
-        Lang::Rust => rust_via_import(file, text, range.clone()),
+        Lang::Ts => ts_via_import(file, text, range),
+        Lang::Rust => rust_via_import(file, text, range),
         Lang::Other => None,
     };
     if via_import.is_some() {
         return via_import;
     }
     if let Some(line) = find_decl(text, sym, lang) {
-        return (line != clicked_line).then(|| Target { path: file.to_path_buf(), line });
+        return (line != clicked_line).then(|| Target {
+            path: file.to_path_buf(),
+            line,
+        });
     }
     find_in_project(file, sym, lang)
 }
@@ -145,17 +159,21 @@ struct TsImport {
     name: String,
 }
 
-static TS_IMPORT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"(?s)\bimport\s+(?:type\s+)?([\w$*{}\s,]+?)\s+from\s*['"]([^'"]+)['"]"#).unwrap()
+static TS_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)\bimport\s+(?:type\s+)?([\w$*{}\s,]+?)\s+from\s*['"]([^'"]+)['"]"#)
+        .expect("static regex is valid")
 });
-static TS_REQUIRE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"(?s)\b(?:const|let|var)\s+(\{[^}]*\}|[\w$]+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap()
+static TS_REQUIRE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)\b(?:const|let|var)\s+(\{[^}]*\}|[\w$]+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)"#)
+        .expect("static regex is valid")
 });
-static TS_REEXPORT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"(?s)\bexport\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s*['"]([^'"]+)['"])?"#).unwrap()
+static TS_REEXPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)\bexport\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s*['"]([^'"]+)['"])?"#)
+        .expect("static regex is valid")
 });
-static TS_EXPORT_STAR: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"\bexport\s+(?:type\s+)?\*\s+(?:as\s+([\w$]+)\s+)?from\s*['"]([^'"]+)['"]"#).unwrap()
+static TS_EXPORT_STAR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\bexport\s+(?:type\s+)?\*\s+(?:as\s+([\w$]+)\s+)?from\s*['"]([^'"]+)['"]"#)
+        .expect("static regex is valid")
 });
 
 /// `a, b as c, type d` → [(exported, local)].
@@ -193,10 +211,22 @@ fn ts_imports(text: &str) -> HashMap<String, TsImport> {
             } else {
                 (part.to_string(), "default".to_string())
             };
-            out.insert(import.0, TsImport { module: module.to_string(), name: import.1 });
+            out.insert(
+                import.0,
+                TsImport {
+                    module: module.to_string(),
+                    name: import.1,
+                },
+            );
         }
-        for (name, local) in braces.map(ts_specifiers).unwrap_or_default() {
-            out.insert(local, TsImport { module: module.to_string(), name });
+        for (name, local) in braces.map_or_default(ts_specifiers) {
+            out.insert(
+                local,
+                TsImport {
+                    module: module.to_string(),
+                    name,
+                },
+            );
         }
     };
     for c in TS_IMPORT.captures_iter(text) {
@@ -208,10 +238,22 @@ fn ts_imports(text: &str) -> HashMap<String, TsImport> {
             // `const { a, b: c } = require('m')`
             let list = binding.trim_matches(|ch| ch == '{' || ch == '}').replace(':', " as ");
             for (name, local) in ts_specifiers(&list) {
-                out.insert(local, TsImport { module: c[2].to_string(), name });
+                out.insert(
+                    local,
+                    TsImport {
+                        module: c[2].to_string(),
+                        name,
+                    },
+                );
             }
         } else {
-            out.insert(binding.to_string(), TsImport { module: c[2].to_string(), name: "*".to_string() });
+            out.insert(
+                binding.to_string(),
+                TsImport {
+                    module: c[2].to_string(),
+                    name: "*".to_string(),
+                },
+            );
         }
     }
     out
@@ -223,7 +265,12 @@ fn ts_via_import(file: &Path, text: &str, range: Range<usize>) -> Option<Target>
     // `ns.Symbol` with `import * as ns from 'm'`.
     let before = &text[..range.start];
     if let Some(obj) = before.strip_suffix('.') {
-        let ns_start = obj.char_indices().rev().take_while(|(_, c)| is_ident(*c)).last().map(|(i, _)| i)?;
+        let ns_start = obj
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| is_ident(*c))
+            .last()
+            .map(|(i, _)| i)?;
         if let Some(imp) = imports.get(&obj[ns_start..]).filter(|i| i.name == "*") {
             let module = resolve_ts_module(file, &imp.module)?;
             return Some(ts_export(&module, sym, 0).unwrap_or(Target { path: module, line: 0 }));
@@ -244,10 +291,16 @@ fn ts_export(path: &Path, name: &str, depth: usize) -> Option<Target> {
         return None;
     }
     let text = read(path)?;
-    let here = |line| Some(Target { path: path.to_path_buf(), line });
+    let here = |line| {
+        Some(Target {
+            path: path.to_path_buf(),
+            line,
+        })
+    };
     if name == "default" {
-        let re = Regex::new(r"(?m)^[ \t]*export[ \t]+default\b").unwrap();
-        if let Some(m) = re.find(&text) {
+        static EXPORT_DEFAULT: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?m)^[ \t]*export[ \t]+default\b").expect("static regex is valid"));
+        if let Some(m) = EXPORT_DEFAULT.find(&text) {
             return here(line_of(&text, m.start()));
         }
         // `export { x as default }` falls through to the re-exports below.
@@ -255,12 +308,16 @@ fn ts_export(path: &Path, name: &str, depth: usize) -> Option<Target> {
         return here(line);
     }
     for c in TS_REEXPORT.captures_iter(&text) {
-        let Some((original, _)) = ts_specifiers(&c[1]).into_iter().find(|(_, exported)| exported == name) else { continue };
-        let line = line_of(&text, c.get(0).unwrap().start());
+        let Some((original, _)) = ts_specifiers(&c[1]).into_iter().find(|(_, exported)| exported == name) else {
+            continue;
+        };
+        let line = line_of(&text, c.get_match().start());
         match c.get(2) {
             // `export { a as name } from 'm'`
             Some(module) => {
-                let Some(next) = resolve_ts_module(path, module.as_str()) else { return here(line) };
+                let Some(next) = resolve_ts_module(path, module.as_str()) else {
+                    return here(line);
+                };
                 return ts_export(&next, &original, depth + 1).or(Some(Target { path: next, line: 0 }));
             }
             // `export { local as name }`: the local is declared or imported here.
@@ -278,7 +335,9 @@ fn ts_export(path: &Path, name: &str, depth: usize) -> Option<Target> {
         }
     }
     for c in TS_EXPORT_STAR.captures_iter(&text) {
-        let Some(next) = resolve_ts_module(path, &c[2]) else { continue };
+        let Some(next) = resolve_ts_module(path, &c[2]) else {
+            continue;
+        };
         match c.get(1) {
             Some(ns) if ns.as_str() == name => return Some(Target { path: next, line: 0 }),
             Some(_) => {}
@@ -292,13 +351,18 @@ fn ts_export(path: &Path, name: &str, depth: usize) -> Option<Target> {
     None
 }
 
-const TS_EXTS: &[&str] = &["ts", "tsx", "d.ts", "mts", "cts", "js", "jsx", "mjs", "cjs", "vue", "svelte"];
+const TS_EXTS: &[&str] = &[
+    "ts", "tsx", "d.ts", "mts", "cts", "js", "jsx", "mjs", "cjs", "vue", "svelte",
+];
 
 /// The file a module path stands for: as is, with an extension, or its index.
 fn ts_file(base: &Path) -> Option<PathBuf> {
     if base.is_file() {
         // ESM TypeScript imports `./a.js` for `a.ts`: prefer the source.
-        if matches!(base.extension().and_then(|e| e.to_str()), Some("js" | "mjs" | "cjs" | "jsx")) {
+        if matches!(
+            base.extension().and_then(|e| e.to_str()),
+            Some("js" | "mjs" | "cjs" | "jsx")
+        ) {
             let stem = base.with_extension("");
             for ext in ["ts", "tsx", "mts", "cts", "d.ts"] {
                 let p = PathBuf::from(format!("{}.{ext}", stem.display()));
@@ -309,12 +373,19 @@ fn ts_file(base: &Path) -> Option<PathBuf> {
         }
         return Some(base.to_path_buf());
     }
-    let with_ext = |p: &Path| TS_EXTS.iter().map(|ext| PathBuf::from(format!("{}.{ext}", p.display()))).find(|p| p.is_file());
+    let with_ext = |p: &Path| {
+        TS_EXTS
+            .iter()
+            .map(|ext| PathBuf::from(format!("{}.{ext}", p.display())))
+            .find(|p| p.is_file())
+    };
     with_ext(base)
         .or_else(|| {
             // `./a.js` written for `a.ts` that has no `.js` sibling.
             let ext = base.extension().and_then(|e| e.to_str())?;
-            matches!(ext, "js" | "mjs" | "cjs" | "jsx").then(|| with_ext(&base.with_extension(""))).flatten()
+            matches!(ext, "js" | "mjs" | "cjs" | "jsx")
+                .then(|| with_ext(&base.with_extension("")))
+                .flatten()
         })
         .or_else(|| with_ext(&base.join("index")))
 }
@@ -373,7 +444,9 @@ fn jsonc(text: &str) -> String {
             _ => out.push(c),
         }
     }
-    Regex::new(r",(\s*[}\]])").unwrap().replace_all(&out, "$1").into_owned()
+    static TRAILING_COMMA: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r",(\s*[}\]])").expect("static regex is valid"));
+    TRAILING_COMMA.replace_all(&out, "$1").into_owned()
 }
 
 /// `compilerOptions` of a tsconfig, merged over the ones it `extends`.
@@ -382,7 +455,11 @@ fn compiler_options(config: &Path, depth: usize) -> Option<(PathBuf, serde_json:
     let dir = config.parent()?.to_path_buf();
     let mut opts = serde_json::Map::new();
     let mut base_dir = dir.clone();
-    if let Some(ext) = json.get("extends").and_then(|e| e.as_str()).filter(|e| e.starts_with('.') && depth < MAX_DEPTH) {
+    if let Some(ext) = json
+        .get("extends")
+        .and_then(|e| e.as_str())
+        .filter(|e| e.starts_with('.') && depth < MAX_DEPTH)
+    {
         let mut parent = normalize(&dir.join(ext));
         if parent.extension().is_none() {
             parent.set_extension("json");
@@ -402,13 +479,22 @@ fn compiler_options(config: &Path, depth: usize) -> Option<(PathBuf, serde_json:
 }
 
 fn tsconfig_resolve(dir: &Path, spec: &str) -> Option<PathBuf> {
-    let config = dir.ancestors().flat_map(|d| [d.join("tsconfig.json"), d.join("jsconfig.json")]).find(|p| p.is_file())?;
+    let config = dir
+        .ancestors()
+        .flat_map(|d| [d.join("tsconfig.json"), d.join("jsconfig.json")])
+        .find(|p| p.is_file())?;
     let (config_dir, opts) = compiler_options(&config, 0)?;
-    let base = opts.get("baseUrl").and_then(|b| b.as_str()).map(|b| normalize(&config_dir.join(b))).unwrap_or(config_dir);
+    let base = opts
+        .get("baseUrl")
+        .and_then(|b| b.as_str())
+        .map(|b| normalize(&config_dir.join(b)))
+        .unwrap_or(config_dir);
     if let Some(paths) = opts.get("paths").and_then(|p| p.as_object()) {
         for (pattern, targets) in paths {
             let star = match pattern.split_once('*') {
-                Some((pre, post)) if spec.starts_with(pre) && spec.ends_with(post) && spec.len() >= pre.len() + post.len() => {
+                Some((pre, post))
+                    if spec.starts_with(pre) && spec.ends_with(post) && spec.len() >= pre.len() + post.len() =>
+                {
                     Some(&spec[pre.len()..spec.len() - post.len()])
                 }
                 None if pattern == spec => Some(""),
@@ -427,7 +513,11 @@ fn tsconfig_resolve(dir: &Path, spec: &str) -> Option<PathBuf> {
 
 fn node_module(dir: &Path, spec: &str) -> Option<PathBuf> {
     let mut parts = spec.splitn(if spec.starts_with('@') { 3 } else { 2 }, '/');
-    let pkg = if spec.starts_with('@') { format!("{}/{}", parts.next()?, parts.next()?) } else { parts.next()?.to_string() };
+    let pkg = if spec.starts_with('@') {
+        format!("{}/{}", parts.next()?, parts.next()?)
+    } else {
+        parts.next()?.to_string()
+    };
     let sub = parts.next();
     for d in dir.ancestors() {
         let nm = d.join("node_modules");
@@ -445,9 +535,15 @@ fn node_module(dir: &Path, spec: &str) -> Option<PathBuf> {
                 }
                 continue;
             }
-            let manifest: Option<serde_json::Value> = read(&root.join("package.json")).and_then(|t| serde_json::from_str(&t).ok());
+            let manifest: Option<serde_json::Value> =
+                read(&root.join("package.json")).and_then(|t| serde_json::from_str(&t).ok());
             for key in ["types", "typings", "module", "main"] {
-                if let Some(p) = manifest.as_ref().and_then(|m| m.get(key)).and_then(|v| v.as_str()).and_then(|e| ts_file(&normalize(&root.join(e)))) {
+                if let Some(p) = manifest
+                    .as_ref()
+                    .and_then(|m| m.get(key))
+                    .and_then(|v| v.as_str())
+                    .and_then(|e| ts_file(&normalize(&root.join(e))))
+                {
                     return Some(p);
                 }
             }
@@ -461,8 +557,9 @@ fn node_module(dir: &Path, spec: &str) -> Option<PathBuf> {
 
 // ---- Rust -----------------------------------------------------------------------------
 
-static RUST_USE: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?use[ \t]+([^;]+);").unwrap());
+static RUST_USE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?use[ \t]+([^;]+);").expect("static regex is valid")
+});
 
 #[derive(Default, Debug)]
 struct RustUses {
@@ -491,7 +588,11 @@ fn split_top(s: &str, sep: char) -> Vec<&str> {
 }
 
 fn segments(path: &str) -> Vec<String> {
-    path.split("::").map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
+    path.split("::")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn expand_use(prefix: &[String], tree: &str, uses: &mut RustUses) {
@@ -539,7 +640,11 @@ fn rust_uses(text: &str) -> RustUses {
     let mut uses = RustUses::default();
     for c in RUST_USE.captures_iter(text) {
         // Line comments inside a multi-line `use` would break the tree.
-        let tree: String = c[1].lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join(" ");
+        let tree: String = c[1]
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join(" ");
         expand_use(&[], &tree, &mut uses);
     }
     uses
@@ -547,11 +652,16 @@ fn rust_uses(text: &str) -> RustUses {
 
 /// Nearest directory with a `Cargo.toml` that has a `[package]`.
 fn crate_dir(file: &Path) -> Option<PathBuf> {
-    file.ancestors().skip(1).find(|d| read(&d.join("Cargo.toml")).is_some_and(|t| t.contains("[package]"))).map(Path::to_path_buf)
+    file.ancestors()
+        .skip(1)
+        .find(|d| read(&d.join("Cargo.toml")).is_some_and(|t| t.contains("[package]")))
+        .map(Path::to_path_buf)
 }
 
 fn crate_root(dir: &Path) -> Option<PathBuf> {
-    [dir.join("src/lib.rs"), dir.join("src/main.rs")].into_iter().find(|p| p.is_file())
+    [dir.join("src/lib.rs"), dir.join("src/main.rs")]
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 /// Directory holding the child modules of module file `file`.
@@ -567,7 +677,13 @@ fn children_dir(file: &Path) -> Option<PathBuf> {
 fn child_module(file: &Path, name: &str) -> Option<PathBuf> {
     let dir = children_dir(file)?;
     // macOS file systems ignore case: `Config` must not find `config.rs`.
-    let has = |dir: &Path, entry: &str| std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| e.file_name() == entry);
+    let has = |dir: &Path, entry: &str| {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| e.file_name() == entry)
+    };
     let file = dir.join(format!("{name}.rs"));
     if has(&dir, &format!("{name}.rs")) && file.is_file() {
         return Some(file);
@@ -588,22 +704,30 @@ fn parent_module(file: &Path) -> Option<PathBuf> {
         return crate_root(dir.parent()?);
     }
     let up = dir.parent()?;
-    [up.join(format!("{parent_dir_name}.rs")), dir.join("mod.rs")].into_iter().find(|p| p.is_file())
+    [up.join(format!("{parent_dir_name}.rs")), dir.join("mod.rs")]
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 /// Root file of the workspace crate named `name` (`-` and `_` alike).
 fn workspace_crate(file: &Path, name: &str) -> Option<PathBuf> {
     let root = project_root(file);
     let wanted = name.replace('-', "_");
-    let name_re = Regex::new(r#"(?m)^\s*name\s*=\s*"([^"]+)""#).unwrap();
-    let mut dirs = vec![root.clone()];
+    static CRATE_NAME: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?m)^\s*name\s*=\s*"([^"]+)""#).expect("static regex is valid"));
+    let name_re = &*CRATE_NAME;
+    let mut dirs = vec![root];
     for depth in 0..2 {
         let mut next = Vec::new();
         for d in &dirs {
             for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
                 let p = e.path();
                 let fname = e.file_name();
-                if !p.is_dir() || fname.to_str().is_some_and(|n| n.starts_with('.') || n == "target" || n == "node_modules") {
+                if !p.is_dir()
+                    || fname
+                        .to_str()
+                        .is_some_and(|n| n.starts_with('.') || n == "target" || n == "node_modules")
+                {
                     continue;
                 }
                 if let Some(t) = read(&p.join("Cargo.toml")) {
@@ -640,7 +764,10 @@ fn resolve_rust_path(file: &Path, segs: &[String], depth: usize) -> Option<Targe
         }
         "Self" => return None,
         // `None`: a crate outside the project.
-        first => (child_module(file, first).or_else(|| workspace_crate(file, first))?, &segs[1..]),
+        first => (
+            child_module(file, first).or_else(|| workspace_crate(file, first))?,
+            &segs[1..],
+        ),
     };
     if rest.is_empty() {
         return Some(Target { path: module, line: 0 });
@@ -679,7 +806,12 @@ fn resolve_rust_path(file: &Path, segs: &[String], depth: usize) -> Option<Targe
 }
 
 fn text_declares_mod(text: &str, name: &str) -> bool {
-    Regex::new(&format!(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+{}[ \t]*;", regex::escape(name))).unwrap().is_match(text)
+    Regex::new(&format!(
+        r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+{}[ \t]*;",
+        regex::escape(name)
+    ))
+    .expect("an escaped name yields a valid regex")
+    .is_match(text)
 }
 
 /// `a::b::` right before byte `start`, as segments.
@@ -687,8 +819,15 @@ fn rust_qualifier(text: &str, start: usize) -> Vec<String> {
     let mut segs = Vec::new();
     let mut end = start;
     while let Some(before) = text[..end].strip_suffix("::") {
-        let s = before.char_indices().rev().take_while(|(_, c)| is_ident(*c)).last().map(|(i, _)| i);
-        let Some(s) = s.filter(|&s| s < before.len()) else { break };
+        let s = before
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| is_ident(*c))
+            .last()
+            .map(|(i, _)| i);
+        let Some(s) = s.filter(|&s| s < before.len()) else {
+            break;
+        };
         segs.insert(0, before[s..].to_string());
         end = s;
     }
@@ -758,24 +897,47 @@ pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
 /// The repository root (`.git`), or the file's folder outside one.
 pub fn project_root(file: &Path) -> PathBuf {
     let dir = file.parent().unwrap_or(file);
-    dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(dir).to_path_buf()
+    dir.ancestors()
+        .find(|d| d.join(".git").exists())
+        .unwrap_or(dir)
+        .to_path_buf()
 }
 
 fn find_in_project(file: &Path, sym: &str, lang: Lang) -> Option<Target> {
     let root = project_root(file);
     let pattern = decl_regex(sym, lang).as_str().trim_start_matches("(?m)").to_string();
-    let query = fs_tools::content::ContentQuery { pattern, regex: true, case_sensitive: true, max_results: MAX_PROJECT_HITS };
+    let query = fs_tools::content::ContentQuery {
+        pattern,
+        regex: true,
+        case_sensitive: true,
+        max_results: MAX_PROJECT_HITS,
+    };
     let hits: Arc<Mutex<Vec<Target>>> = Arc::default();
     let sink = hits.clone();
     fs_tools::content::search(&root, &query, Arc::new(AtomicBool::new(false)), move |m| {
-        let mut hits = sink.lock().unwrap();
-        hits.extend(m.lines.iter().map(|l| Target { path: m.path.clone(), line: l.line_number.saturating_sub(1) as u32 }));
+        let mut hits = sink.lock();
+        hits.extend(m.lines.iter().map(|l| Target {
+            path: m.path.clone(),
+            line: l.line_number.saturating_sub(1) as u32,
+        }));
     })
     .ok()?;
-    let mut hits = std::mem::take(&mut *hits.lock().unwrap());
+    let mut hits = std::mem::take(&mut *hits.lock());
     // Same language first, then the file closest to the one being read.
-    let shared = |p: &Path| p.components().zip(file.components()).take_while(|(a, b)| a == b).count();
-    hits.sort_by_key(|t| (lang_of(&t.path) != lang, std::cmp::Reverse(shared(&t.path)), t.path.clone(), t.line));
+    let shared = |p: &Path| {
+        p.components()
+            .zip(file.components())
+            .take_while(|(a, b)| a == b)
+            .count()
+    };
+    hits.sort_by_key(|t| {
+        (
+            lang_of(&t.path) != lang,
+            std::cmp::Reverse(shared(&t.path)),
+            t.path.clone(),
+            t.line,
+        )
+    });
     hits.into_iter().next()
 }
 
@@ -854,10 +1016,13 @@ mod tests {
 
     #[test]
     fn local_declaration_and_project_fallback() {
-        let t = Tree::new("local", &[
-            ("a.ts", "function helper() {}\n\nhelper();\nglobalThing();\n"),
-            ("b/c.ts", "export function globalThing() {}\n"),
-        ]);
+        let t = Tree::new(
+            "local",
+            &[
+                ("a.ts", "function helper() {}\n\nhelper();\nglobalThing();\n"),
+                ("b/c.ts", "export function globalThing() {}\n"),
+            ],
+        );
         assert_eq!(t.at("a.ts", "helper();"), hit("a.ts", 0));
         // On the declaration itself there is nowhere to go.
         assert_eq!(t.at("a.ts", "helper() {}"), None);
@@ -878,13 +1043,25 @@ mod tests {
             ("crates/cfg/src/config.rs", "#[derive(Debug)]\npub struct Config;\n"),
             ("crates/cfg/src/prelude.rs", "pub enum Theme { Dark }\n"),
         ]);
-        assert_eq!(t.at("app/src/main.rs", "GitPanel; let"), hit("app/src/panels/git.rs", 1));
+        assert_eq!(
+            t.at("app/src/main.rs", "GitPanel; let"),
+            hit("app/src/panels/git.rs", 1)
+        );
         assert_eq!(t.at("app/src/main.rs", "M; search"), hit("app/src/panels/git.rs", 2));
         assert_eq!(t.at("app/src/main.rs", "run()"), hit("app/src/panels/search.rs", 1));
-        assert_eq!(t.at("app/src/main.rs", "Config; Theme"), hit("crates/cfg/src/config.rs", 1));
-        assert_eq!(t.at("app/src/main.rs", "Theme::Dark"), hit("crates/cfg/src/prelude.rs", 0));
+        assert_eq!(
+            t.at("app/src/main.rs", "Config; Theme"),
+            hit("crates/cfg/src/config.rs", 1)
+        );
+        assert_eq!(
+            t.at("app/src/main.rs", "Theme::Dark"),
+            hit("crates/cfg/src/prelude.rs", 0)
+        );
         assert_eq!(t.at("app/src/main.rs", "load()"), hit("crates/cfg/src/lib.rs", 3));
-        assert_eq!(t.at("app/src/panels/search.rs", "GitPanel; }"), hit("app/src/panels/git.rs", 1));
+        assert_eq!(
+            t.at("app/src/panels/search.rs", "GitPanel; }"),
+            hit("app/src/panels/git.rs", 1)
+        );
     }
 
     /// Against gridterm's own sources: real `use` trees and workspace crates.
@@ -895,7 +1072,12 @@ mod tests {
             let path = src.join(file);
             let text = std::fs::read_to_string(&path).unwrap();
             let t = find(&path, &text, text.find(needle).unwrap() + 1).expect(needle);
-            let line = std::fs::read_to_string(&t.path).unwrap().lines().nth(t.line as usize).unwrap().to_string();
+            let line = std::fs::read_to_string(&t.path)
+                .unwrap()
+                .lines()
+                .nth(t.line as usize)
+                .unwrap()
+                .to_string();
             (t.path.file_name().unwrap().to_str().unwrap().to_string(), line)
         };
         let (file, line) = at("workspace/mod.rs", "SearchPanel, settings");
@@ -916,7 +1098,8 @@ mod tests {
 
     #[test]
     fn jsonc_is_parsed() {
-        let v: serde_json::Value = serde_json::from_str(&jsonc("{ \"a\": \"http://x\", /* c */ \"b\": [1,], }")).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&jsonc("{ \"a\": \"http://x\", /* c */ \"b\": [1,], }")).unwrap();
         assert_eq!(v["a"], "http://x");
         assert_eq!(v["b"][0], 1);
     }

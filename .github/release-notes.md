@@ -1,13 +1,13 @@
-## Instalación
+## Install
 
-Solo macOS 13 o posterior en Apple Silicon (arm64).
+macOS 13 or later on Apple Silicon (arm64) only.
 
-1. Descarga `gridterm-<versión>-arm64.zip` y descomprímelo.
-2. Mueve `gridterm.app` a `/Applications`.
-3. La app está firmada ad-hoc, no con un certificado de Apple, así que macOS la bloquea la primera vez («no se puede abrir» o «está dañada»). Para permitirla:
+1. Download `gridterm-<version>-arm64.zip` and unzip it.
+2. Move `gridterm.app` to `/Applications`.
+3. The app is signed ad hoc, not with an Apple Developer ID, so macOS blocks it the first time ("cannot be opened" or "is damaged"). To allow it:
 
    ```sh
    xattr -dr com.apple.quarantine /Applications/gridterm.app
    ```
 
-   o haz clic derecho sobre la app → Abrir → Abrir.
+   or right-click the app → Open → Open.

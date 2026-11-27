@@ -161,18 +161,12 @@ pub fn search(
             }
             if collector.binary {
                 // Hand back the slots reserved for lines found before the NUL.
-                shared
-                    .reserved
-                    .fetch_sub(collector.lines.len(), Ordering::Relaxed);
+                shared.reserved.fetch_sub(collector.lines.len(), Ordering::Relaxed);
             } else if !collector.lines.is_empty() && !shared.cancel.load(Ordering::Relaxed) {
                 let lines = collector.lines;
                 shared.files.fetch_add(1, Ordering::Relaxed);
                 shared.delivered.fetch_add(lines.len(), Ordering::Relaxed);
-                let rel_path = path
-                    .strip_prefix(&root)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .into_owned();
+                let rel_path = path.strip_prefix(&root).unwrap_or(path).to_string_lossy().into_owned();
                 sink(FileMatches {
                     path: path.to_path_buf(),
                     rel_path,

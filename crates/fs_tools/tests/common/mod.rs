@@ -18,21 +18,9 @@ pub fn fixture() -> tempfile::TempDir {
     write(r, ".gitignore", b"target/\n*.log\n");
     write(r, ".hidden_file", b"hello hidden\n");
     write(r, ".config/settings.txt", b"hello config\n");
-    write(
-        r,
-        "src/main.rs",
-        b"fn main() {\n    println!(\"Hello World\");\n}\n",
-    );
-    write(
-        r,
-        "src/lib.rs",
-        b"pub fn hello() {}\n// HELLO again, hello twice\n",
-    );
-    write(
-        r,
-        "src/nested/deep/util.rs",
-        b"pub fn util() -> u32 { 42 }\n",
-    );
+    write(r, "src/main.rs", b"fn main() {\n    println!(\"Hello World\");\n}\n");
+    write(r, "src/lib.rs", b"pub fn hello() {}\n// HELLO again, hello twice\n");
+    write(r, "src/nested/deep/util.rs", b"pub fn util() -> u32 { 42 }\n");
     write(r, "target/out.txt", b"hello from target\n");
     write(r, "debug.log", b"hello log\n");
     write(r, "README.md", b"# Readme\nSay hello.\n");

@@ -27,8 +27,7 @@ const PROMPT_AFTER: Duration = Duration::from_secs(2);
 const PROMPT_PROBE: Duration = Duration::from_secs(1);
 /// Shown as progress while Git Credential Manager waits for an answer (with
 /// several accounts for a host it asks which one, in a window of its own).
-pub const CREDENTIAL_PROMPT: &str =
-    "waiting for Git Credential Manager: answer its window (it may be behind gridterm)";
+pub const CREDENTIAL_PROMPT: &str = "waiting for Git Credential Manager: answer its window (it may be behind gridterm)";
 
 /// Output of a successful git invocation.
 #[derive(Debug)]
@@ -52,9 +51,7 @@ impl GitOutput {
 
 fn git_command(root: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
-    cmd.args(args)
-        .current_dir(root)
-        .env("GIT_TERMINAL_PROMPT", "0");
+    cmd.args(args).current_dir(root).env("GIT_TERMINAL_PROMPT", "0");
     cmd
 }
 
@@ -67,11 +64,7 @@ pub(crate) fn run(root: &Path, args: &[&str], stdin: Option<&str>) -> Result<Git
     log::debug!("git {} (in {})", args.join(" "), root.display());
 
     let mut child = git_command(root, args)
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
+        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -121,9 +114,7 @@ fn check_status(args: &[&str], status: ExitStatus, output: GitOutput) -> Result<
     } else {
         format!("git {subcommand} failed: {detail}")
     };
-    Err(GitError::new(classify(detail), message)
-        .with_detail(detail)
-        .into())
+    Err(GitError::new(classify(detail), message).with_detail(detail).into())
 }
 
 /// Runs `cmd` in its own process group with stdin closed. Each trimmed,
@@ -337,12 +328,7 @@ fn signal_group(pgid: u32, signal: &str) {
 /// after the last `\r`.
 fn settle_progress(text: &str) -> String {
     text.split('\n')
-        .map(|line| {
-            line.trim_end_matches('\r')
-                .rsplit('\r')
-                .next()
-                .unwrap_or_default()
-        })
+        .map(|line| line.trim_end_matches('\r').rsplit('\r').next().unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -386,21 +372,11 @@ mod tests {
             "printf 'Counting: 1%%\\rCounting: 50%%\\rCounting: 100%%, done.\\n  \\nTo /x.git\\n' >&2; echo out",
         ]);
         let mut lines = Vec::new();
-        let (status, output) = run_streaming(
-            cmd,
-            &mut |l| lines.push(l.to_owned()),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
+        let (status, output) = run_streaming(cmd, &mut |l| lines.push(l.to_owned()), &AtomicBool::new(false)).unwrap();
         assert!(status.success());
         assert_eq!(
             lines,
-            [
-                "Counting: 1%",
-                "Counting: 50%",
-                "Counting: 100%, done.",
-                "To /x.git"
-            ]
+            ["Counting: 1%", "Counting: 50%", "Counting: 100%, done.", "To /x.git"]
         );
         assert_eq!(output.stdout, "out\n");
         assert_eq!(output.stderr, "Counting: 100%, done.\n  \nTo /x.git\n");
@@ -412,12 +388,7 @@ mod tests {
         cmd.args(["-c", "echo first >&2; sleep 1; echo second >&2"]);
         let start = Instant::now();
         let mut times = Vec::new();
-        run_streaming(
-            cmd,
-            &mut |_| times.push(start.elapsed()),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
+        run_streaming(cmd, &mut |_| times.push(start.elapsed()), &AtomicBool::new(false)).unwrap();
         assert_eq!(times.len(), 2);
         assert!(times[0] < Duration::from_millis(700), "{times:?}");
     }
@@ -437,11 +408,7 @@ mod tests {
         cmd.args(["-c", "sleep 10 & sleep 10; wait"]);
         let start = Instant::now();
         let err = run_streaming(cmd, &mut |_| {}, &cancel).unwrap_err();
-        assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "{:?}",
-            start.elapsed()
-        );
+        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
         assert_eq!(crate::error_kind(&err), GitErrorKind::Cancelled);
         setter.join().unwrap();
     }
@@ -464,8 +431,7 @@ mod tests {
 
     #[test]
     fn already_cancelled_does_not_spawn() {
-        let err =
-            run_streaming(Command::new("sleep"), &mut |_| {}, &AtomicBool::new(true)).unwrap_err();
+        let err = run_streaming(Command::new("sleep"), &mut |_| {}, &AtomicBool::new(true)).unwrap_err();
         assert_eq!(crate::error_kind(&err), GitErrorKind::Cancelled);
     }
 }

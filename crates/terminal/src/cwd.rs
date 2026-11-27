@@ -14,18 +14,11 @@ pub fn foreground_pid(master: &File) -> Option<i32> {
 
 /// Current working directory of `pid`.
 pub fn process_cwd(pid: i32) -> Option<PathBuf> {
+    // SAFETY: proc_vnodepathinfo is a plain C struct; all-zero bytes are a valid value.
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
     // SAFETY: the buffer is a properly sized, zeroed proc_vnodepathinfo.
-    let n = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDVNODEPATHINFO,
-            0,
-            (&mut info as *mut libc::proc_vnodepathinfo).cast(),
-            size,
-        )
-    };
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDVNODEPATHINFO, 0, (&raw mut info).cast(), size) };
     if n != size {
         return None;
     }
@@ -48,10 +41,11 @@ pub fn process_name(pid: i32) -> Option<String> {
 
 /// Parent of `pid` (None for unknown processes and for launchd).
 pub fn parent_pid(pid: i32) -> Option<i32> {
+    // SAFETY: proc_bsdinfo is a plain C struct; all-zero bytes are a valid value.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     // SAFETY: the buffer is a properly sized, zeroed proc_bsdinfo.
-    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
     (n == size && info.pbi_ppid > 0).then_some(info.pbi_ppid as i32)
 }
 
@@ -117,7 +111,10 @@ mod tests {
     fn own_process_cwd_and_name() {
         let pid = std::process::id() as i32;
         let cwd = process_cwd(pid).expect("cwd");
-        assert_eq!(cwd.canonicalize().unwrap(), std::env::current_dir().unwrap().canonicalize().unwrap());
+        assert_eq!(
+            cwd.canonicalize().unwrap(),
+            std::env::current_dir().unwrap().canonicalize().unwrap()
+        );
         assert!(process_name(pid).is_some());
     }
 

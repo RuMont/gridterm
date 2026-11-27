@@ -29,8 +29,8 @@ pub struct GitRepo {
 impl GitRepo {
     /// Opens the repository whose working directory is `root`.
     pub fn open(root: &Path) -> Result<Self> {
-        let repo = Repository::open(root)
-            .with_context(|| format!("failed to open git repository at {}", root.display()))?;
+        let repo =
+            Repository::open(root).with_context(|| format!("failed to open git repository at {}", root.display()))?;
         let workdir = repo
             .workdir()
             .ok_or_else(|| anyhow!("{} is a bare repository", root.display()))?;
@@ -133,9 +133,7 @@ impl GitRepo {
     pub fn commit(&self, message: &str) -> Result<()> {
         let (staged, _) = status::file_changes(&self.repo()?)?;
         if staged.is_empty() {
-            return Err(
-                GitError::new(GitErrorKind::NothingToCommit, "nothing staged to commit").into(),
-            );
+            return Err(GitError::new(GitErrorKind::NothingToCommit, "nothing staged to commit").into());
         }
         cli::run(&self.root, &["commit", "-F", "-"], Some(message))?;
         Ok(())
@@ -162,9 +160,7 @@ impl GitRepo {
         }
         let repo = self.repo()?;
         let head = repo.head()?.peel_to_commit()?;
-        let message = String::from_utf8_lossy(head.message_bytes())
-            .trim_end()
-            .to_owned();
+        let message = String::from_utf8_lossy(head.message_bytes()).trim_end().to_owned();
         let parent = head.parent(0)?;
         repo.reset(parent.as_object(), ResetType::Soft, None)?;
         Ok(message)
@@ -190,11 +186,19 @@ impl GitRepo {
             if reference.kind() == Some(git2::ReferenceType::Symbolic) {
                 continue;
             }
-            let Ok(commit) = reference.peel_to_commit() else { continue };
-            let Ok(name) = reference.shorthand().map(str::to_owned) else { continue };
+            let Ok(commit) = reference.peel_to_commit() else {
+                continue;
+            };
+            let Ok(name) = reference.shorthand().map(str::to_owned) else {
+                continue;
+            };
             let kind = if reference.is_branch() {
                 local_tips.push(commit.id());
-                if current.as_deref() == Some(name.as_str()) { RefKind::Head } else { RefKind::Local }
+                if current.as_deref() == Some(name.as_str()) {
+                    RefKind::Head
+                } else {
+                    RefKind::Local
+                }
             } else if reference.is_remote() {
                 remote_tips.push(commit.id());
                 RefKind::Remote
@@ -206,10 +210,23 @@ impl GitRepo {
             refs.entry(commit.id()).or_default().push(RefLabel { name, kind });
         }
         if current.is_none() {
-            refs.entry(head).or_default().insert(0, RefLabel { name: "HEAD".into(), kind: RefKind::Head });
+            refs.entry(head).or_default().insert(
+                0,
+                RefLabel {
+                    name: "HEAD".into(),
+                    kind: RefKind::Head,
+                },
+            );
         }
         for labels in refs.values_mut() {
-            labels.sort_by_key(|l| (l.kind != RefKind::Head, l.kind == RefKind::Tag, l.kind == RefKind::Remote, l.name.clone()));
+            labels.sort_by_key(|l| {
+                (
+                    l.kind != RefKind::Head,
+                    l.kind == RefKind::Tag,
+                    l.kind == RefKind::Remote,
+                    l.name.clone(),
+                )
+            });
         }
 
         // Unpushed commits. HEAD's history: not reachable from its pushed
@@ -288,11 +305,7 @@ impl GitRepo {
     /// Pushes the current branch, setting its upstream on first push
     /// (to `origin`, or the first remote if there is no `origin`).
     pub fn push(&self) -> Result<String> {
-        self.push_with(
-            UpstreamPolicy::SetIfMissing,
-            &mut |_| {},
-            &AtomicBool::new(false),
-        )
+        self.push_with(UpstreamPolicy::SetIfMissing, &mut |_| {}, &AtomicBool::new(false))
     }
 
     /// Pushes the current branch with `git push --progress`, passing each
@@ -312,14 +325,10 @@ impl GitRepo {
         let branch = status::current_branch(&repo)?
             .ok_or_else(|| GitError::new(GitErrorKind::Other, "cannot push: HEAD is detached"))?;
         let Some(remote) = default_remote(&repo)? else {
-            return Err(
-                GitError::new(GitErrorKind::NoRemote, "cannot push: no remote configured").into(),
-            );
+            return Err(GitError::new(GitErrorKind::NoRemote, "cannot push: no remote configured").into());
         };
 
-        let has_upstream = repo
-            .branch_upstream_name(&format!("refs/heads/{branch}"))
-            .is_ok();
+        let has_upstream = repo.branch_upstream_name(&format!("refs/heads/{branch}")).is_ok();
         let output = if has_upstream {
             self.git_streaming(&["push", "--progress"], progress, cancel)?
         } else {
@@ -366,10 +375,7 @@ impl GitRepo {
         if let Some((up_remote, merge)) = upstream {
             // A "." remote means a local upstream; push would not go there.
             if up_remote != "." {
-                let merge = merge
-                    .strip_prefix("refs/heads/")
-                    .unwrap_or(&merge)
-                    .to_owned();
+                let merge = merge.strip_prefix("refs/heads/").unwrap_or(&merge).to_owned();
                 return Ok(Some((up_remote, merge)));
             }
         }
@@ -385,12 +391,7 @@ impl GitRepo {
     /// Like [`pull`](Self::pull) with `--progress`, streaming progress lines
     /// to `progress`. Setting `cancel` kills git, aborts a rebase left in
     /// progress, and returns a `Cancelled` error.
-    pub fn pull_with(
-        &self,
-        rebase: bool,
-        progress: &mut dyn FnMut(&str),
-        cancel: &AtomicBool,
-    ) -> Result<String> {
+    pub fn pull_with(&self, rebase: bool, progress: &mut dyn FnMut(&str), cancel: &AtomicBool) -> Result<String> {
         let mode = if rebase { "--rebase" } else { "--ff-only" };
         // Never abort a rebase the user started before this pull.
         let rebase_before = self.rebase_in_progress()?;
@@ -418,9 +419,7 @@ impl GitRepo {
     fn rebase_in_progress(&self) -> Result<bool> {
         Ok(matches!(
             self.repo()?.state(),
-            RepositoryState::Rebase
-                | RepositoryState::RebaseInteractive
-                | RepositoryState::RebaseMerge
+            RepositoryState::Rebase | RepositoryState::RebaseInteractive | RepositoryState::RebaseMerge
         ))
     }
 

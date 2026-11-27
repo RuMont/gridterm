@@ -13,7 +13,10 @@ pub struct GridSpec {
 
 impl GridSpec {
     pub fn new(max_cols: usize, max_rows: usize) -> Self {
-        Self { max_cols: max_cols.max(1), max_rows: max_rows.max(1) }
+        Self {
+            max_cols: max_cols.max(1),
+            max_rows: max_rows.max(1),
+        }
     }
 
     pub fn capacity(&self) -> usize {
@@ -49,7 +52,10 @@ pub fn slots(n: usize, spec: GridSpec) -> Layout {
 
 /// Row/column position of `index` within a layout.
 pub fn position_of(layout: &Layout, index: usize) -> Option<(usize, usize)> {
-    layout.iter().enumerate().find_map(|(r, row)| row.iter().position(|&i| i == index).map(|c| (r, c)))
+    layout
+        .iter()
+        .enumerate()
+        .find_map(|(r, row)| row.iter().position(|&i| i == index).map(|c| (r, c)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +105,10 @@ pub struct GridWeights {
 impl GridWeights {
     /// Equal sizes for every row and cell of `layout`.
     pub fn equal(layout: &Layout) -> Self {
-        Self { rows: vec![1.0; layout.len()], cols: layout.iter().map(|r| vec![1.0; r.len()]).collect() }
+        Self {
+            rows: vec![1.0; layout.len()],
+            cols: layout.iter().map(|r| vec![1.0; r.len()]).collect(),
+        }
     }
 
     /// Whether these weights describe `layout` (same rows and cells per row).

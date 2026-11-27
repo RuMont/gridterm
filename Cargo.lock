@@ -111,12 +111,14 @@ dependencies = [
 
 [[package]]
 name = "agents"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
+ "crossbeam-channel",
  "futures",
  "getrandom 0.3.4",
  "libc",
  "log",
+ "parking_lot",
  "serde_json",
  "tempfile",
  "tungstenite",
@@ -1111,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "config"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -2033,7 +2035,7 @@ dependencies = [
 
 [[package]]
 name = "fs_tools"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2265,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "git_client"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -3047,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "gridterm"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "agents",
  "anyhow",
@@ -3064,6 +3066,7 @@ dependencies = [
  "libc",
  "log",
  "lsp-types",
+ "parking_lot",
  "regex",
  "serde",
  "serde_json",
@@ -3872,7 +3875,7 @@ dependencies = [
 
 [[package]]
 name = "layout"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "lazy_static"
@@ -6998,7 +7001,7 @@ dependencies = [
 
 [[package]]
 name = "terminal"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",

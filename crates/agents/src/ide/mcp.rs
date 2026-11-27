@@ -16,8 +16,14 @@ pub(crate) enum Incoming {
 }
 
 const TOOLS: &[(&str, &str)] = &[
-    ("getDiagnostics", "Language diagnostics (gridterm has none: always empty)"),
-    ("closeAllDiffTabs", "Close diff tabs (gridterm shows diffs in the terminal)"),
+    (
+        "getDiagnostics",
+        "Language diagnostics (gridterm has none: always empty)",
+    ),
+    (
+        "closeAllDiffTabs",
+        "Close diff tabs (gridterm shows diffs in the terminal)",
+    ),
     ("close_tab", "Close a tab by name"),
 ];
 
@@ -36,21 +42,30 @@ pub(crate) fn handle(text: &str) -> Incoming {
         (_, None) | (None, _) => Incoming::Ignore,
         (Some(method), Some(id)) => Incoming::Reply(match method {
             "initialize" => {
-                let version = msg.pointer("/params/protocolVersion").and_then(Value::as_str).unwrap_or("2025-06-18");
-                result(id, json!({
-                    "protocolVersion": version,
-                    "capabilities": { "tools": { "listChanged": false } },
-                    "serverInfo": { "name": super::IDE_NAME, "version": env!("CARGO_PKG_VERSION") },
-                }))
+                let version = msg
+                    .pointer("/params/protocolVersion")
+                    .and_then(Value::as_str)
+                    .unwrap_or("2025-06-18");
+                result(
+                    id,
+                    json!({
+                        "protocolVersion": version,
+                        "capabilities": { "tools": { "listChanged": false } },
+                        "serverInfo": { "name": super::IDE_NAME, "version": env!("CARGO_PKG_VERSION") },
+                    }),
+                )
             }
             "ping" => result(id, json!({})),
-            "tools/list" => result(id, json!({
-                "tools": TOOLS.iter().map(|(name, description)| json!({
-                    "name": name,
-                    "description": description,
-                    "inputSchema": { "type": "object", "properties": {} },
-                })).collect::<Vec<_>>(),
-            })),
+            "tools/list" => result(
+                id,
+                json!({
+                    "tools": TOOLS.iter().map(|(name, description)| json!({
+                        "name": name,
+                        "description": description,
+                        "inputSchema": { "type": "object", "properties": {} },
+                    })).collect::<Vec<_>>(),
+                }),
+            ),
             "tools/call" => match msg.pointer("/params/name").and_then(Value::as_str) {
                 Some("getDiagnostics") => result(id, text_content("[]")),
                 Some("closeAllDiffTabs" | "close_tab") => result(id, text_content("OK")),
@@ -77,7 +92,9 @@ mod tests {
 
     #[test]
     fn initialize_echoes_protocol_version() {
-        let r = reply(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}"#);
+        let r = reply(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}"#,
+        );
         assert_eq!(r["id"], 1);
         assert_eq!(r["result"]["protocolVersion"], "2024-11-05");
         assert_eq!(r["result"]["serverInfo"]["name"], "gridterm");
@@ -87,22 +104,42 @@ mod tests {
     #[test]
     fn tools_and_errors() {
         let list = reply(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
-        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
         assert_eq!(names, ["getDiagnostics", "closeAllDiffTabs", "close_tab"]);
-        let diag = reply(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getDiagnostics","arguments":{}}}"#);
+        let diag = reply(
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getDiagnostics","arguments":{}}}"#,
+        );
         assert_eq!(diag["result"]["content"][0]["text"], "[]");
-        let diff = reply(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"openDiff","arguments":{}}}"#);
+        let diff =
+            reply(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"openDiff","arguments":{}}}"#);
         assert_eq!(diff["error"]["code"], -32601);
         let unknown = reply(r#"{"jsonrpc":"2.0","id":"x","method":"resources/list"}"#);
-        assert_eq!((unknown["id"].as_str(), unknown["error"]["code"].as_i64()), (Some("x"), Some(-32601)));
-        assert_eq!(reply(r#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#)["result"], json!({}));
+        assert_eq!(
+            (unknown["id"].as_str(), unknown["error"]["code"].as_i64()),
+            (Some("x"), Some(-32601))
+        );
+        assert_eq!(
+            reply(r#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#)["result"],
+            json!({})
+        );
         assert_eq!(reply("not json")["error"]["code"], -32700);
     }
 
     #[test]
     fn notifications() {
-        assert_eq!(handle(r#"{"jsonrpc":"2.0","method":"ide_connected","params":{"pid":4242}}"#), Incoming::IdeConnected(Some(4242)));
-        assert_eq!(handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#), Incoming::Ignore);
+        assert_eq!(
+            handle(r#"{"jsonrpc":"2.0","method":"ide_connected","params":{"pid":4242}}"#),
+            Incoming::IdeConnected(Some(4242))
+        );
+        assert_eq!(
+            handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#),
+            Incoming::Ignore
+        );
         assert_eq!(handle(r#"{"jsonrpc":"2.0","id":9,"result":{}}"#), Incoming::Ignore);
     }
 }

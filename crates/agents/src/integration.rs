@@ -51,9 +51,12 @@ pub fn write_agent_files(dir: &Path, exe: &Path) -> io::Result<AgentFiles> {
     // Claude Code plugin layout (also what omp's --plugin-dir loads).
     write(&files.plugin_dir.join(".claude-plugin/plugin.json"), &manifest)?;
     write(&files.plugin_dir.join(".mcp.json"), &mcp)?;
-    write(&files.copilot_config, &json!({
-        "mcpServers": { "gridterm": { "type": "local", "command": exe, "args": ["mcp"], "tools": ["*"] } },
-    }))?;
+    write(
+        &files.copilot_config,
+        &json!({
+            "mcpServers": { "gridterm": { "type": "local", "command": exe, "args": ["mcp"], "tools": ["*"] } },
+        }),
+    )?;
     std::fs::create_dir_all(&files.zsh_dir)?;
     std::fs::write(files.zsh_dir.join(".zshenv"), ZSHENV)?;
     // Subcommand lists are cached per agent; refresh them on every start.
