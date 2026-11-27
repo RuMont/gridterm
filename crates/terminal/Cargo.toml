@@ -12,3 +12,6 @@ anyhow.workspace = true
 log.workspace = true
 
 [dev-dependencies]
+
+[lints]
+workspace = true

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Plan cases T3 (spawn latency) and T6 (copy from selection) at library level.
 
 use std::time::{Duration, Instant};

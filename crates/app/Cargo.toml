@@ -40,3 +40,6 @@ tempfile.workspace = true
 [features]
 # End-to-end acceptance runner inside the real app (see scripts/e2e.sh).
 e2e = ["dep:gpui-pre", "dep:gpui-pre-macos", "dep:image", "dep:tempfile"]
+
+[lints]
+workspace = true

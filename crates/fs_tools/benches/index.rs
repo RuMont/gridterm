@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Criterion benchmarks for indexing, fuzzy matching and content search.
 //! Run with: cargo bench -p fs_tools   (add `-- --quick` for a fast pass)
 

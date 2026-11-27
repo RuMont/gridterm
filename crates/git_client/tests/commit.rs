@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! `GitRepo::commit_details`: message, author, parents and per-file diffs.
 
 use std::fs;

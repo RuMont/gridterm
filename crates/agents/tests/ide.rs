@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Protocol tests: a client that behaves like Claude Code talks to the server.
 
 use std::time::{Duration, Instant};

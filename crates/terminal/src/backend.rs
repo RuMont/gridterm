@@ -238,6 +238,7 @@ pub fn process_alive(pid: i32) -> bool {
     // SAFETY: zeroed POD buffer of the right size.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    // SAFETY: `info` is a properly sized, writable proc_bsdinfo and `size` matches it.
     let n = unsafe {
         libc::proc_pidinfo(
             pid,

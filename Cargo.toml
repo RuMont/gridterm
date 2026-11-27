@@ -35,6 +35,13 @@ terminal = { path = "crates/terminal" }
 git_client = { path = "crates/git_client" }
 fs_tools = { path = "crates/fs_tools" }
 
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "warn"
+
 [profile.dev]
 opt-level = 1
 

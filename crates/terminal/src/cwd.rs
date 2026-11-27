@@ -14,6 +14,7 @@ pub fn foreground_pid(master: &File) -> Option<i32> {
 
 /// Current working directory of `pid`.
 pub fn process_cwd(pid: i32) -> Option<PathBuf> {
+    // SAFETY: proc_vnodepathinfo is a plain C struct; all-zero bytes are a valid value.
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
     // SAFETY: the buffer is a properly sized, zeroed proc_vnodepathinfo.
@@ -48,6 +49,7 @@ pub fn process_name(pid: i32) -> Option<String> {
 
 /// Parent of `pid` (None for unknown processes and for launchd).
 pub fn parent_pid(pid: i32) -> Option<i32> {
+    // SAFETY: proc_bsdinfo is a plain C struct; all-zero bytes are a valid value.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     // SAFETY: the buffer is a properly sized, zeroed proc_bsdinfo.

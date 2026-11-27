@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Plan case S6: 100k files indexed in < 1 s, each keystroke settles in < 16 ms.
 //! Run with: cargo test --release -p fs_tools --test perf -- --ignored --nocapture
 

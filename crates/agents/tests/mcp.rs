@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! gridterm's MCP server for agents: socket, stdio server, generated files
 //! and the zsh integration.
 

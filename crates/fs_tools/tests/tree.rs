@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
 use fs_tools::tree::{DirEntryInfo, TreeOptions, read_dir};

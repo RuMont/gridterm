@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Hunk- and line-level staging (`diff_file`, `apply_hunk`, `apply_lines`).
 
 use std::fs;
