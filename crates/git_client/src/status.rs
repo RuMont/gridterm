@@ -5,9 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use git2::{
-    BranchType, Delta, DiffDelta, ErrorCode, Oid, Repository, Status, StatusEntry, StatusOptions,
-};
+use git2::{BranchType, Delta, DiffDelta, ErrorCode, Oid, Repository, Status, StatusEntry, StatusOptions};
 
 use crate::{ChangeKind, FileChange, RepoStatus};
 
@@ -21,9 +19,7 @@ pub(crate) fn status(repo: &Repository) -> Result<RepoStatus> {
         })
         .transpose()?;
 
-    let upstream = branch
-        .as_deref()
-        .and_then(|name| upstream_branch(repo, name));
+    let upstream = branch.as_deref().and_then(|name| upstream_branch(repo, name));
     let (ahead, behind) = match (head_oid, &upstream) {
         (Some(local), Some((_, remote))) => repo.graph_ahead_behind(local, *remote)?,
         _ => (0, 0),
@@ -162,11 +158,7 @@ pub(crate) fn head_oid(repo: &Repository) -> Result<Option<Oid>> {
 /// Upstream shorthand and tip of local branch `name`, if configured and the
 /// remote-tracking ref exists.
 pub(crate) fn upstream_branch(repo: &Repository, name: &str) -> Option<(String, Oid)> {
-    let upstream = repo
-        .find_branch(name, BranchType::Local)
-        .ok()?
-        .upstream()
-        .ok()?;
+    let upstream = repo.find_branch(name, BranchType::Local).ok()?.upstream().ok()?;
     let oid = upstream.get().peel_to_commit().ok()?.id();
     let name = upstream.name().ok()??.to_owned();
     Some((name, oid))

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
 use std::fs;
@@ -58,13 +60,8 @@ fn create_reports_parent_in_caller_form() {
     let (_w, rx) = start(root);
     let t = Instant::now();
     write(root, "new.txt", b"x");
-    let dirs = rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("no callback within 1s");
-    assert!(
-        dirs.contains(&root.to_path_buf()),
-        "{dirs:?} (root {root:?})"
-    );
+    let dirs = rx.recv_timeout(Duration::from_secs(1)).expect("no callback within 1s");
+    assert!(dirs.contains(&root.to_path_buf()), "{dirs:?} (root {root:?})");
     assert!(t.elapsed() < Duration::from_secs(1));
 }
 
@@ -125,14 +122,8 @@ fn burst_is_debounced() {
         write(root, &format!("f{i}.txt"), b"x");
     }
     let got = collect(&rx, Duration::from_millis(1500));
-    let with_root = got
-        .iter()
-        .filter(|d| d.contains(&root.to_path_buf()))
-        .count();
-    assert!(
-        (1..=3).contains(&with_root),
-        "{with_root} callbacks: {got:?}"
-    );
+    let with_root = got.iter().filter(|d| d.contains(&root.to_path_buf())).count();
+    assert!((1..=3).contains(&with_root), "{with_root} callbacks: {got:?}");
 }
 
 #[test]

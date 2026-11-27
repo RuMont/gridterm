@@ -79,15 +79,25 @@ pub fn layout(commits: &[CommitInfo]) -> Graph {
     let mut from_node = Vec::new();
     for (id, parent_ids) in parents.iter().enumerate() {
         waiting.clear();
-        waiting.extend(lanes.iter().enumerate().filter(|(_, l)| l.is_some_and(|(w, _)| w == id)).map(|(i, _)| i));
-        let (lane, color) = match waiting.first() {
-            Some(&i) => (i, lanes[i].unwrap().1),
+        waiting.extend(
+            lanes
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.is_some_and(|(w, _)| w == id))
+                .map(|(i, _)| i),
+        );
+        let (lane, color) = match waiting.first().and_then(|&i| lanes[i].map(|(_, c)| (i, c))) {
+            Some(found) => found,
             None => {
                 let i = free_slot(&mut lanes);
                 (i, new_color())
             }
         };
-        let mut row = GraphRow { lane, color, ..Default::default() };
+        let mut row = GraphRow {
+            lane,
+            color,
+            ..Default::default()
+        };
         for (i, l) in lanes.iter().enumerate() {
             if let Some((_, c)) = l {
                 let to = if waiting.contains(&i) { lane } else { i };
@@ -101,8 +111,16 @@ pub fn layout(commits: &[CommitInfo]) -> Graph {
         // lane already waits for it.
         from_node.clear();
         for (p, &parent) in parent_ids.iter().enumerate() {
-            match lanes.iter().position(|l| l.is_some_and(|(w, _)| w == parent)) {
-                Some(i) => from_node.push(Seg { from: lane, to: i, color: lanes[i].unwrap().1 }),
+            let waiting_lane = lanes
+                .iter()
+                .enumerate()
+                .find_map(|(i, l)| l.filter(|&(w, _)| w == parent).map(|(_, c)| (i, c)));
+            match waiting_lane {
+                Some((i, color)) => from_node.push(Seg {
+                    from: lane,
+                    to: i,
+                    color,
+                }),
                 None => {
                     let (i, c) = if p == 0 && lanes[lane].is_none() {
                         (lane, color)
@@ -111,14 +129,22 @@ pub fn layout(commits: &[CommitInfo]) -> Graph {
                         (i, new_color())
                     };
                     lanes[i] = Some((parent, c));
-                    from_node.push(Seg { from: lane, to: i, color: c });
+                    from_node.push(Seg {
+                        from: lane,
+                        to: i,
+                        color: c,
+                    });
                 }
             }
         }
         for (i, l) in lanes.iter().enumerate() {
             if let Some((_, c)) = l {
                 if !from_node.iter().any(|s| s.to == i) {
-                    row.bottom.push(Seg { from: i, to: i, color: *c });
+                    row.bottom.push(Seg {
+                        from: i,
+                        to: i,
+                        color: *c,
+                    });
                 }
             }
         }
@@ -126,7 +152,15 @@ pub fn layout(commits: &[CommitInfo]) -> Graph {
         while lanes.last().is_some_and(Option::is_none) {
             lanes.pop();
         }
-        let used = row.top.iter().chain(&row.bottom).flat_map(|s| [s.from, s.to]).chain([lane]).max().unwrap_or(0) + 1;
+        let used = row
+            .top
+            .iter()
+            .chain(&row.bottom)
+            .flat_map(|s| [s.from, s.to])
+            .chain([lane])
+            .max()
+            .unwrap_or(0)
+            + 1;
         max_lanes = max_lanes.max(used);
         rows.push(row);
     }
@@ -135,7 +169,11 @@ pub fn layout(commits: &[CommitInfo]) -> Graph {
 
 /// Lane of each commit by sha (helper for callers and tests).
 pub fn lanes_by_sha(commits: &[CommitInfo], graph: &Graph) -> HashMap<String, usize> {
-    commits.iter().zip(&graph.rows).map(|(c, r)| (c.sha.clone(), r.lane)).collect()
+    commits
+        .iter()
+        .zip(&graph.rows)
+        .map(|(c, r)| (c.sha.clone(), r.lane))
+        .collect()
 }
 
 #[cfg(test)]
@@ -147,7 +185,7 @@ mod tests {
         spec.iter()
             .map(|(sha, parents)| CommitInfo {
                 sha: sha.to_string(),
-                parents: parents.iter().map(|p| p.to_string()).collect(),
+                parents: parents.iter().map(std::string::ToString::to_string).collect(),
                 ..Default::default()
             })
             .collect()
@@ -162,8 +200,14 @@ mod tests {
         let c = h(&[("c", &["b"]), ("b", &["a"]), ("a", &[])]);
         let g = layout(&c);
         assert_eq!(g.max_lanes, 1);
-        assert!(g.rows.iter().all(|r| r.lane == 0 && crosses(&r.top) == 0 && crosses(&r.bottom) == 0));
-        assert!(g.rows.iter().all(|r| r.color == g.rows[0].color), "colour kept along the branch");
+        assert!(g
+            .rows
+            .iter()
+            .all(|r| r.lane == 0 && crosses(&r.top) == 0 && crosses(&r.bottom) == 0));
+        assert!(
+            g.rows.iter().all(|r| r.color == g.rows[0].color),
+            "colour kept along the branch"
+        );
         assert!(g.rows[2].bottom.is_empty(), "root has no line below");
         assert!(g.rows[0].top.is_empty(), "tip has no line above");
     }
@@ -171,7 +215,13 @@ mod tests {
     #[test]
     fn branch_and_merge() {
         // m merges f2 into main; main: m - b - a ; feature: f2 - f1 - a
-        let c = h(&[("m", &["b", "f2"]), ("f2", &["f1"]), ("b", &["a"]), ("f1", &["a"]), ("a", &[])]);
+        let c = h(&[
+            ("m", &["b", "f2"]),
+            ("f2", &["f1"]),
+            ("b", &["a"]),
+            ("f1", &["a"]),
+            ("a", &[]),
+        ]);
         let g = layout(&c);
         let lanes = lanes_by_sha(&c, &g);
         assert_eq!(g.max_lanes, 2);
@@ -182,7 +232,15 @@ mod tests {
         assert_eq!(lanes["a"], lanes["b"], "main keeps its lane");
         // The feature lane joins main's right below f1 (git's `|/`), so
         // only one line reaches the root.
-        assert!(g.rows[3].bottom.contains(&Seg { from: lanes["f1"], to: lanes["a"], color: g.rows[2].color }), "{:?}", g.rows[3]);
+        assert!(
+            g.rows[3].bottom.contains(&Seg {
+                from: lanes["f1"],
+                to: lanes["a"],
+                color: g.rows[2].color
+            }),
+            "{:?}",
+            g.rows[3]
+        );
         assert_eq!(g.rows[4].top.len(), 1);
         assert_ne!(g.rows[1].color, g.rows[0].color);
     }
@@ -195,12 +253,21 @@ mod tests {
         assert_eq!(g.max_lanes, 2);
         assert_ne!(lanes["x1"], lanes["y1"]);
         // x lane passes straight through y1's row.
-        assert!(g.rows[1].top.iter().any(|s| s.from == lanes["x1"] && s.to == lanes["x1"]));
+        assert!(g.rows[1]
+            .top
+            .iter()
+            .any(|s| s.from == lanes["x1"] && s.to == lanes["x1"]));
     }
 
     #[test]
     fn octopus_merge() {
-        let c = h(&[("m", &["a", "b", "c"]), ("c", &["r"]), ("b", &["r"]), ("a", &["r"]), ("r", &[])]);
+        let c = h(&[
+            ("m", &["a", "b", "c"]),
+            ("c", &["r"]),
+            ("b", &["r"]),
+            ("a", &["r"]),
+            ("r", &[]),
+        ]);
         let g = layout(&c);
         assert_eq!(g.rows[0].bottom.len(), 3);
         assert_eq!(g.max_lanes, 3);
@@ -215,7 +282,14 @@ mod tests {
         // `b`'s parent `a` was cut off by the log limit.
         let c = h(&[("c", &["b"]), ("b", &["a"])]);
         let g = layout(&c);
-        assert_eq!(g.rows[1].bottom, vec![Seg { from: 0, to: 0, color: g.rows[1].color }]);
+        assert_eq!(
+            g.rows[1].bottom,
+            vec![Seg {
+                from: 0,
+                to: 0,
+                color: g.rows[1].color
+            }]
+        );
     }
 
     #[test]

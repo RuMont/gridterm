@@ -46,11 +46,15 @@ pub fn remove_stale(path: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix("gridterm-")?.strip_suffix(".sock")?.parse::<i32>().ok()) else {
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("gridterm-")?.strip_suffix(".sock")?.parse::<i32>().ok())
+        else {
             continue;
         };
         // SAFETY: signal 0 only checks that the process exists.
-        let alive = unsafe { libc::kill(pid, 0) } == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        let alive =
+            unsafe { libc::kill(pid, 0) } == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
         if !alive {
             let _ = std::fs::remove_file(entry.path());
         }
@@ -91,7 +95,10 @@ impl AgentSocket {
             let meta = std::fs::metadata(dir)?;
             // SAFETY: getuid has no failure modes.
             if meta.uid() != unsafe { libc::getuid() } || meta.mode() & 0o022 != 0 {
-                return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("{} is not owned and writable only by this user", dir.display())));
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("{} is not owned and writable only by this user", dir.display()),
+                ));
             }
         }
         let _ = std::fs::remove_file(path);
@@ -101,8 +108,14 @@ impl AgentSocket {
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, rx) = unbounded();
         let s = stop.clone();
-        thread::Builder::new().name("agent-socket".into()).spawn(move || accept_loop(listener, tx, s))?;
-        Ok(Self { path: path.to_path_buf(), stop, requests: Some(rx) })
+        thread::Builder::new()
+            .name("agent-socket".into())
+            .spawn(move || accept_loop(listener, tx, s))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            stop,
+            requests: Some(rx),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -128,7 +141,9 @@ fn accept_loop(listener: UnixListener, tx: UnboundedSender<AgentRequest>, stop: 
             Ok((stream, _)) => {
                 let tx = tx.clone();
                 let stop = stop.clone();
-                let _ = thread::Builder::new().name("agent-conn".into()).spawn(move || serve(stream, tx, stop));
+                let _ = thread::Builder::new()
+                    .name("agent-conn".into())
+                    .spawn(move || serve(stream, tx, stop));
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
             Err(e) => {
@@ -150,8 +165,8 @@ pub fn peer_pid(stream: &UnixStream) -> Option<i32> {
             stream.as_raw_fd(),
             libc::SOL_LOCAL,
             libc::LOCAL_PEERPID,
-            (&mut pid as *mut libc::pid_t).cast(),
-            &mut len,
+            (&raw mut pid).cast(),
+            &raw mut len,
         )
     };
     (rc == 0 && pid > 0).then_some(pid)
@@ -169,14 +184,26 @@ fn serve(stream: UnixStream, tx: UnboundedSender<AgentRequest>, stop: Arc<Atomic
         }
         let Ok(line) = line else { break };
         let (id, method) = match serde_json::from_str::<Value>(&line) {
-            Ok(v) => (v.get("id").cloned().unwrap_or(Value::Null), v.get("method").and_then(Value::as_str).unwrap_or("").to_string()),
+            Ok(v) => (
+                v.get("id").cloned().unwrap_or(Value::Null),
+                v.get("method").and_then(Value::as_str).unwrap_or("").to_string(),
+            ),
             Err(_) => (Value::Null, String::new()),
         };
         let (reply_tx, reply_rx) = mpsc::channel();
-        let answer = if tx.unbounded_send(AgentRequest { peer_pid: peer, method, reply: reply_tx }).is_err() {
+        let answer = if tx
+            .unbounded_send(AgentRequest {
+                peer_pid: peer,
+                method,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
             json!({ "error": "gridterm is shutting down" })
         } else {
-            reply_rx.recv_timeout(ANSWER_TIMEOUT).unwrap_or_else(|_| json!({ "error": "gridterm did not answer in time" }))
+            reply_rx
+                .recv_timeout(ANSWER_TIMEOUT)
+                .unwrap_or_else(|_| json!({ "error": "gridterm did not answer in time" }))
         };
         let out = match answer.get("error") {
             Some(err) => json!({ "id": id, "error": err }),
@@ -191,14 +218,19 @@ fn serve(stream: UnixStream, tx: UnboundedSender<AgentRequest>, stop: Arc<Atomic
 /// Client side: asks the app at `socket` and returns the result (or the
 /// app's error message).
 pub fn request(socket: &Path, method: &str) -> Result<Value, String> {
-    let mut stream = UnixStream::connect(socket).map_err(|e| format!("cannot reach gridterm ({}): {e}", socket.display()))?;
-    stream.set_read_timeout(Some(ANSWER_TIMEOUT + Duration::from_secs(1))).ok();
+    let mut stream =
+        UnixStream::connect(socket).map_err(|e| format!("cannot reach gridterm ({}): {e}", socket.display()))?;
+    stream
+        .set_read_timeout(Some(ANSWER_TIMEOUT + Duration::from_secs(1)))
+        .ok();
     writeln!(stream, "{}", json!({ "id": 1, "method": method })).map_err(|e| e.to_string())?;
     let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line).map_err(|e| format!("no answer from gridterm: {e}"))?;
+    BufReader::new(stream)
+        .read_line(&mut line)
+        .map_err(|e| format!("no answer from gridterm: {e}"))?;
     let v: Value = serde_json::from_str(&line).map_err(|e| format!("bad answer from gridterm: {e}"))?;
     match v.get("error") {
-        Some(e) => Err(e.as_str().map(str::to_owned).unwrap_or_else(|| e.to_string())),
+        Some(e) => Err(e.as_str().map_or_else(|| e.to_string(), str::to_owned)),
         None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
     }
 }

@@ -5,12 +5,13 @@ use std::io::{self, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crossbeam_channel as mpsc;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use parking_lot::Mutex;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::{HeaderValue, StatusCode};
 use tungstenite::Message;
@@ -25,12 +26,18 @@ pub type ConnId = u64;
 pub enum IdeEvent {
     /// An authenticated client (it read the lock file's token) identified
     /// itself (`ide_connected`); `pid` is its process.
-    Connected { conn: ConnId, pid: Option<i32> },
+    Connected {
+        conn: ConnId,
+        pid: Option<i32>,
+    },
     /// A client connected without a token (e.g. opencode, which finds the
     /// port through `CLAUDE_CODE_SSE_PORT` and never identifies itself). The
     /// app must find its process from `peer_port` (the client's local port)
     /// before sending it anything.
-    Anonymous { conn: ConnId, peer_port: u16 },
+    Anonymous {
+        conn: ConnId,
+        peer_port: u16,
+    },
     Disconnected(ConnId),
 }
 
@@ -79,7 +86,9 @@ impl IdeServer {
             events: Some(rx),
         };
         server.write_lock()?;
-        thread::Builder::new().name("ide-accept".into()).spawn(move || accept_loop(listener, shared))?;
+        thread::Builder::new()
+            .name("ide-accept".into())
+            .spawn(move || accept_loop(listener, shared))?;
         Ok(server)
     }
 
@@ -102,14 +111,14 @@ impl IdeServer {
 
     /// Queues `n` for connection `conn`; false if it is gone.
     pub fn send(&self, conn: ConnId, n: &Notification) -> bool {
-        let conns = self.shared.conns.lock().unwrap();
+        let conns = self.shared.conns.lock();
         conns.get(&conn).is_some_and(|tx| tx.send(n.to_json()).is_ok())
     }
 
     /// Rewrites the lock file when the folders change (Claude Code also
     /// matches IDEs by `workspaceFolders` containing its cwd).
     pub fn set_workspace_folders(&self, folders: Vec<String>) -> io::Result<()> {
-        let mut current = self.folders.lock().unwrap();
+        let mut current = self.folders.lock();
         if *current == folders {
             return Ok(());
         }
@@ -121,7 +130,7 @@ impl IdeServer {
     fn write_lock(&self) -> io::Result<()> {
         let json = serde_json::json!({
             "pid": std::process::id(),
-            "workspaceFolders": *self.folders.lock().unwrap(),
+            "workspaceFolders": *self.folders.lock(),
             "ideName": IDE_NAME,
             "transport": "ws",
             "runningInWindows": false,
@@ -134,7 +143,7 @@ impl IdeServer {
 impl Drop for IdeServer {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
-        self.shared.conns.lock().unwrap().clear();
+        self.shared.conns.lock().clear();
         let _ = std::fs::remove_file(&self.lock_path);
     }
 }
@@ -147,7 +156,12 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
     let tmp = path.with_extension("lock.tmp");
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
     f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     f.write_all(bytes)?;
     f.sync_all()?;
@@ -165,7 +179,9 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
         match listener.accept() {
             Ok((stream, _)) => {
                 let shared = shared.clone();
-                let _ = thread::Builder::new().name("ide-conn".into()).spawn(move || serve(stream, shared));
+                let _ = thread::Builder::new()
+                    .name("ide-conn".into())
+                    .spawn(move || serve(stream, shared));
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
             Err(e) => {
@@ -192,7 +208,7 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
         return;
     }
     let token = shared.token.clone();
-    let peer_port = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
+    let peer_port = stream.peer_addr().map_or(0, |a| a.port());
     let anonymous = Arc::new(AtomicBool::new(false));
     let anon = anonymous.clone();
     // The signature is tungstenite's handshake callback.
@@ -217,24 +233,29 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             None => anon.store(true, Ordering::Relaxed),
         }
         if mcp {
-            resp.headers_mut().insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mcp"));
+            resp.headers_mut()
+                .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mcp"));
         }
         Ok(resp)
     };
-    let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else { return };
+    let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else {
+        return;
+    };
     if ws.get_ref().set_read_timeout(Some(POLL)).is_err() {
         return;
     }
     let id = shared.next_conn.fetch_add(1, Ordering::Relaxed);
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::unbounded::<String>();
     let mut identified = false;
     let mut pending = Some(tx);
     if anonymous.load(Ordering::Relaxed) {
         if let Some(tx) = pending.take() {
-            shared.conns.lock().unwrap().insert(id, tx);
+            shared.conns.lock().insert(id, tx);
             identified = true;
         }
-        let _ = shared.events.unbounded_send(IdeEvent::Anonymous { conn: id, peer_port });
+        let _ = shared
+            .events
+            .unbounded_send(IdeEvent::Anonymous { conn: id, peer_port });
     }
     loop {
         if shared.stop.load(Ordering::Acquire) {
@@ -242,7 +263,7 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             let _ = ws.flush();
             break;
         }
-        if identified && !shared.conns.lock().unwrap().contains_key(&id) {
+        if identified && !shared.conns.lock().contains_key(&id) {
             break; // server stopped or connection dropped by the app
         }
         while let Ok(out) = rx.try_recv() {
@@ -259,7 +280,7 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
                 }
                 Incoming::IdeConnected(pid) => {
                     if let Some(tx) = pending.take() {
-                        shared.conns.lock().unwrap().insert(id, tx);
+                        shared.conns.lock().insert(id, tx);
                         identified = true;
                     }
                     let _ = shared.events.unbounded_send(IdeEvent::Connected { conn: id, pid });
@@ -270,13 +291,15 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             Ok(_) => {
                 let _ = ws.flush(); // answers pings
             }
-            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+            Err(tungstenite::Error::Io(e))
+                if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+            {
                 let _ = ws.flush();
             }
             Err(_) => break,
         }
     }
-    shared.conns.lock().unwrap().remove(&id);
+    shared.conns.lock().remove(&id);
     if identified {
         let _ = shared.events.unbounded_send(IdeEvent::Disconnected(id));
     }

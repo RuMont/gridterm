@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
 use std::path::PathBuf;
@@ -19,11 +21,7 @@ fn settle(index: &mut FileIndex) {
 }
 
 fn all_paths(index: &FileIndex) -> Vec<String> {
-    let mut v: Vec<String> = index
-        .results(0, u32::MAX)
-        .into_iter()
-        .map(|h| h.rel_path)
-        .collect();
+    let mut v: Vec<String> = index.results(0, u32::MAX).into_iter().map(|h| h.rel_path).collect();
     v.sort();
     v
 }
@@ -160,10 +158,7 @@ fn watcher_triggers_rescan() {
         if !index.is_indexing() && all_paths(&index).contains(&"src/watched.rs".to_string()) {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "watcher did not pick up new file"
-        );
+        assert!(Instant::now() < deadline, "watcher did not pick up new file");
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(index.indexed_count(), before + 1);
@@ -216,7 +211,8 @@ fn index_respects_max_files() {
     for i in 0..500 {
         std::fs::write(dir.path().join(format!("f{i}.txt")), "").unwrap();
     }
-    let mut index = fs_tools::index::FileIndex::with_max_files(dir.path().to_path_buf(), std::sync::Arc::new(|| {}), 120);
+    let mut index =
+        fs_tools::index::FileIndex::with_max_files(dir.path().to_path_buf(), std::sync::Arc::new(|| {}), 120);
     let start = std::time::Instant::now();
     while index.is_indexing() || index.tick(10).running {
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
@@ -256,7 +252,11 @@ fn filename_matches_rank_before_directory_matches() {
     let name_hits = ["src/bus/event.rs", "src/ui/event_handler.rs", "docs/prevent.md"];
     let first: Vec<&str> = order[..name_hits.len()].to_vec();
     for f in name_hits {
-        assert!(first.contains(&f), "{f} not among the first {}: {order:?}", name_hits.len());
+        assert!(
+            first.contains(&f),
+            "{f} not among the first {}: {order:?}",
+            name_hits.len()
+        );
     }
     // Exact file name first.
     assert_eq!(order[0], "src/bus/event.rs", "{order:?}");

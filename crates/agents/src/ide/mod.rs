@@ -47,7 +47,12 @@ impl Selection {
 
     /// A file shown with the cursor at `line` and nothing selected.
     pub fn opened(path: &Path, line: u32) -> Self {
-        Self { file_path: Some(path.display().to_string()), start: (line, 0), end: (line, 0), text: String::new() }
+        Self {
+            file_path: Some(path.display().to_string()),
+            start: (line, 0),
+            end: (line, 0),
+            text: String::new(),
+        }
     }
 
     fn params(&self) -> serde_json::Value {
@@ -73,7 +78,10 @@ impl Selection {
 pub enum Notification {
     SelectionChanged(Selection),
     /// Inserts `@file#Lstart-end` into the prompt (0-based lines).
-    AtMentioned { file_path: String, lines: Option<(u32, u32)> },
+    AtMentioned {
+        file_path: String,
+        lines: Option<(u32, u32)>,
+    },
 }
 
 impl Notification {
@@ -131,14 +139,20 @@ mod tests {
 
     #[test]
     fn selection_json_matches_claude_schema() {
-        let sel = Selection { file_path: Some("/p/a.rs".into()), start: (2, 0), end: (4, 3), text: "abc".into() };
+        let sel = Selection {
+            file_path: Some("/p/a.rs".into()),
+            start: (2, 0),
+            end: (4, 3),
+            text: "abc".into(),
+        };
         let v: serde_json::Value = serde_json::from_str(&Notification::SelectionChanged(sel).to_json()).unwrap();
         assert_eq!(v["method"], "selection_changed");
         assert_eq!(v["params"]["filePath"], "/p/a.rs");
         assert_eq!(v["params"]["text"], "abc");
         assert_eq!(v["params"]["selection"]["start"]["line"], 2);
         assert_eq!(v["params"]["selection"]["end"]["character"], 3);
-        let cleared: serde_json::Value = serde_json::from_str(&Notification::SelectionChanged(Selection::cleared()).to_json()).unwrap();
+        let cleared: serde_json::Value =
+            serde_json::from_str(&Notification::SelectionChanged(Selection::cleared()).to_json()).unwrap();
         assert!(cleared["params"].get("filePath").is_none());
         assert_eq!(cleared["params"]["text"], "");
     }
@@ -168,9 +182,15 @@ mod tests {
 
     #[test]
     fn at_mention_json() {
-        let n = Notification::AtMentioned { file_path: "/p/a.rs".into(), lines: Some((2, 4)) };
+        let n = Notification::AtMentioned {
+            file_path: "/p/a.rs".into(),
+            lines: Some((2, 4)),
+        };
         let v: serde_json::Value = serde_json::from_str(&n.to_json()).unwrap();
         assert_eq!(v["method"], "at_mentioned");
-        assert_eq!((v["params"]["lineStart"].as_u64(), v["params"]["lineEnd"].as_u64()), (Some(2), Some(4)));
+        assert_eq!(
+            (v["params"]["lineStart"].as_u64(), v["params"]["lineEnd"].as_u64()),
+            (Some(2), Some(4))
+        );
     }
 }

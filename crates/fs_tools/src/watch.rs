@@ -44,10 +44,7 @@ impl DirWatcher {
     /// the same prefix as `root` even if the OS reports a canonical form (e.g.
     /// `/private/var/...` for `/var/...` on macOS). If the backend asks for a
     /// rescan (dropped events), `root` itself is reported.
-    pub fn new(
-        root: &Path,
-        on_change: impl Fn(Vec<PathBuf>) + Send + Sync + 'static,
-    ) -> anyhow::Result<Self> {
+    pub fn new(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + Sync + 'static) -> anyhow::Result<Self> {
         let mut mapper = PathMapper::new(root);
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<Vec<PathBuf>>();
         let (stop_tx, stop_rx) = crossbeam_channel::bounded::<()>(0);
@@ -82,11 +79,7 @@ impl DirWatcher {
     }
 }
 
-fn debounce_loop(
-    events: &Receiver<Vec<PathBuf>>,
-    stop: &Receiver<()>,
-    on_change: &impl Fn(Vec<PathBuf>),
-) {
+fn debounce_loop(events: &Receiver<Vec<PathBuf>>, stop: &Receiver<()>, on_change: &impl Fn(Vec<PathBuf>)) {
     let mut pending = BTreeSet::new();
     loop {
         // Wait for the first event of a burst.
@@ -113,10 +106,7 @@ fn debounce_loop(
             }
         }
         // Don't fire if we were stopped while debouncing.
-        if matches!(
-            stop.try_recv(),
-            Err(crossbeam_channel::TryRecvError::Disconnected)
-        ) {
+        if matches!(stop.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected)) {
             return;
         }
         on_change(std::mem::take(&mut pending).into_iter().collect());
@@ -188,20 +178,13 @@ impl PathMapper {
                     .filter(|p| !self.created.contains_key(*p) && !is_stale_create(p, self.started))
                     .collect();
                 self.remember_created(&fresh);
-                fresh
-                    .into_iter()
-                    .filter_map(|p| self.parent_of(p))
-                    .collect()
+                fresh.into_iter().filter_map(|p| self.parent_of(p)).collect()
             }
             EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)) | EventKind::Any => {
                 for p in &event.paths {
                     self.created.remove(p);
                 }
-                event
-                    .paths
-                    .iter()
-                    .filter_map(|p| self.parent_of(p))
-                    .collect()
+                event.paths.iter().filter_map(|p| self.parent_of(p)).collect()
             }
             EventKind::Modify(_) | EventKind::Access(_) | EventKind::Other => Vec::new(),
         }
@@ -213,8 +196,7 @@ impl PathMapper {
         }
         let now = Instant::now();
         if self.created.len() + paths.len() > MAX_REMEMBERED_CREATES {
-            self.created
-                .retain(|_, at| now.duration_since(*at) < CREATE_MEMORY);
+            self.created.retain(|_, at| now.duration_since(*at) < CREATE_MEMORY);
             if self.created.len() + paths.len() > MAX_REMEMBERED_CREATES {
                 self.created.clear();
             }
@@ -263,7 +245,10 @@ pub struct FileWatcher {
 impl FileWatcher {
     pub fn new(path: &Path, on_change: impl Fn() + Send + Sync + 'static) -> anyhow::Result<Self> {
         let parent = path.parent().ok_or_else(|| anyhow::anyhow!("no parent directory"))?;
-        let name = path.file_name().ok_or_else(|| anyhow::anyhow!("no file name"))?.to_os_string();
+        let name = path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("no file name"))?
+            .to_os_string();
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<Vec<PathBuf>>();
         let (stop_tx, stop_rx) = crossbeam_channel::bounded::<()>(0);
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -280,7 +265,10 @@ impl FileWatcher {
         thread::Builder::new()
             .name("fs-file-watch".into())
             .spawn(move || debounce_loop(&event_rx, &stop_rx, &|_| on_change()))?;
-        Ok(Self { _watcher: watcher, _stop: stop_tx })
+        Ok(Self {
+            _watcher: watcher,
+            _stop: stop_tx,
+        })
     }
 }
 
@@ -304,14 +292,19 @@ mod tests {
         while rx.recv_timeout(Duration::from_millis(800)).is_ok() {}
         // A sibling changing is not reported.
         std::fs::write(dir.path().join("b.txt"), "x").unwrap();
-        assert!(rx.recv_timeout(Duration::from_millis(800)).is_err(), "sibling change reported");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(800)).is_err(),
+            "sibling change reported"
+        );
         // Content change.
         std::fs::write(&file, "two").unwrap();
-        rx.recv_timeout(Duration::from_secs(3)).expect("content change not reported");
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("content change not reported");
         // Atomic replace (write temp + rename over).
         std::fs::write(dir.path().join("a.tmp"), "three").unwrap();
         std::fs::rename(dir.path().join("a.tmp"), &file).unwrap();
-        rx.recv_timeout(Duration::from_secs(3)).expect("atomic replace not reported");
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("atomic replace not reported");
         // Removal.
         std::fs::remove_file(&file).unwrap();
         rx.recv_timeout(Duration::from_secs(3)).expect("removal not reported");
@@ -333,10 +326,7 @@ mod tests {
             created: HashMap::new(),
             started: SystemTime::now(),
         };
-        let create = ev(
-            EventKind::Create(CreateKind::File),
-            &["/private/var/x/a/b.txt"],
-        );
+        let create = ev(EventKind::Create(CreateKind::File), &["/private/var/x/a/b.txt"]);
         assert_eq!(m.changed_dirs(&create), vec![PathBuf::from("/var/x/a")]);
         // FSEvents re-reports the create flag on a later write: suppressed
         // until the path is removed or renamed.
@@ -349,15 +339,9 @@ mod tests {
         assert_eq!(m.changed_dirs(&create), vec![PathBuf::from("/var/x/a")]);
         let top = ev(EventKind::Create(CreateKind::File), &["/var/x/b.txt"]);
         assert_eq!(m.changed_dirs(&top), vec![PathBuf::from("/var/x")]);
-        let git = ev(
-            EventKind::Create(CreateKind::File),
-            &["/var/x/.git/index.lock"],
-        );
+        let git = ev(EventKind::Create(CreateKind::File), &["/var/x/.git/index.lock"]);
         assert!(m.changed_dirs(&git).is_empty());
-        let git_nested = ev(
-            EventKind::Create(CreateKind::File),
-            &["/var/x/sub/.git/objects/ab/cd"],
-        );
+        let git_nested = ev(EventKind::Create(CreateKind::File), &["/var/x/sub/.git/objects/ab/cd"]);
         assert!(m.changed_dirs(&git_nested).is_empty());
         let data = ev(
             EventKind::Modify(ModifyKind::Data(DataChange::Content)),
@@ -372,10 +356,7 @@ mod tests {
             m.changed_dirs(&rename),
             vec![PathBuf::from("/var/x/a"), PathBuf::from("/var/x/c")]
         );
-        let root = ev(
-            EventKind::Remove(notify::event::RemoveKind::Folder),
-            &["/var/x"],
-        );
+        let root = ev(EventKind::Remove(notify::event::RemoveKind::Folder), &["/var/x"]);
         assert!(m.changed_dirs(&root).is_empty());
         let outside = ev(EventKind::Create(CreateKind::File), &["/elsewhere/f"]);
         assert!(m.changed_dirs(&outside).is_empty());

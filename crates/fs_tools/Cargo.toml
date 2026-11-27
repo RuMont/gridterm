@@ -1,6 +1,8 @@
 [package]
 name = "fs_tools"
 version.workspace = true
+license.workspace = true
+publish.workspace = true
 edition = "2024"
 
 [dependencies]
@@ -25,3 +27,6 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 [[bench]]
 name = "index"
 harness = false
+
+[lints]
+workspace = true

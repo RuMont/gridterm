@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! gridterm's MCP server for agents: socket, stdio server, generated files
 //! and the zsh integration.
 
@@ -17,7 +19,10 @@ fn socket_tempdir() -> tempfile::TempDir {
 }
 
 /// Answers every request of `socket` with `answer(method)` on a thread.
-fn serve(socket: &mut AgentSocket, answer: fn(&AgentRequest) -> Value) -> std::thread::JoinHandle<Vec<(Option<i32>, String)>> {
+fn serve(
+    socket: &mut AgentSocket,
+    answer: fn(&AgentRequest) -> Value,
+) -> std::thread::JoinHandle<Vec<(Option<i32>, String)>> {
     let mut requests = socket.take_requests().unwrap();
     std::thread::spawn(move || {
         let mut seen = Vec::new();
@@ -56,7 +61,9 @@ fn socket_reports_the_peer_pid_and_is_private() {
         .unwrap();
     writeln!(child.stdin.as_mut().unwrap(), r#"{{"id":7,"method":"selection"}}"#).unwrap();
     let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
     let pid = child.id() as i32;
     child.kill().ok();
     child.wait().ok();
@@ -64,7 +71,11 @@ fn socket_reports_the_peer_pid_and_is_private() {
     assert_eq!(reply, json!({ "id": 7, "result": { "method": "selection" } }));
     drop(socket);
     let seen = server.join().unwrap();
-    assert_eq!(seen.first(), Some(&(Some(pid), "selection".to_string())), "peer pid from the kernel");
+    assert_eq!(
+        seen.first(),
+        Some(&(Some(pid), "selection".to_string())),
+        "peer pid from the kernel"
+    );
     assert!(!path.exists(), "socket file left behind");
 }
 
@@ -88,23 +99,42 @@ fn stdio_server_lists_and_calls_tools_through_the_socket() {
     .join("\n");
     let mut out = Vec::new();
     // Returns when the input ends.
-    agents::mcp_stdio::run(input.as_bytes(), &mut out, Some(path.clone()));
-    let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    assert_eq!(replies.len(), 5, "one reply per request, none for the notification: {replies:?}");
+    agents::mcp_stdio::run(input.as_bytes(), &mut out, Some(path));
+    let replies: Vec<Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        replies.len(),
+        5,
+        "one reply per request, none for the notification: {replies:?}"
+    );
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "gridterm");
-    let names: Vec<&str> = replies[1]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = replies[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
     assert_eq!(names, ["get_selection", "get_cell_context"]);
     assert!(replies[1]["result"]["tools"][0]["inputSchema"]["type"] == "object");
     let text: Value = serde_json::from_str(replies[2]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(text["start_line"], 3);
     assert_eq!(replies[2]["result"].get("isError"), None);
     assert_eq!(replies[3]["result"]["isError"], true);
-    assert!(replies[3]["result"]["content"][0]["text"].as_str().unwrap().contains("not running inside a gridterm cell"));
+    assert!(replies[3]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("not running inside a gridterm cell"));
     assert_eq!(replies[4]["error"]["code"], -32602);
     drop(socket);
     let seen = server.join().unwrap();
-    assert_eq!(seen.iter().map(|s| s.1.as_str()).collect::<Vec<_>>(), ["selection", "cell"]);
+    assert_eq!(
+        seen.iter().map(|s| s.1.as_str()).collect::<Vec<_>>(),
+        ["selection", "cell"]
+    );
 }
 
 #[test]
@@ -145,7 +175,10 @@ fn stdio_server_without_socket_says_so() {
     agents::mcp_stdio::run(input.as_bytes(), &mut out, None);
     let reply: Value = serde_json::from_str(String::from_utf8(out).unwrap().trim()).unwrap();
     assert_eq!(reply["result"]["isError"], true);
-    assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("GRIDTERM_SOCKET is not set"));
+    assert!(reply["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("GRIDTERM_SOCKET is not set"));
 }
 
 #[test]
@@ -154,7 +187,10 @@ fn generated_files_and_shell_environment() {
     let exe = Path::new("/Applications/gridterm.app/Contents/MacOS/gridterm");
     let files = write_agent_files(dir.path(), exe).unwrap();
     let read = |p: &Path| -> Value { serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap() };
-    assert_eq!(read(&files.plugin_dir.join(".claude-plugin/plugin.json"))["name"], "gridterm");
+    assert_eq!(
+        read(&files.plugin_dir.join(".claude-plugin/plugin.json"))["name"],
+        "gridterm"
+    );
     let mcp = read(&files.plugin_dir.join(".mcp.json"));
     assert_eq!(mcp["mcpServers"]["gridterm"]["command"], exe.to_str().unwrap());
     assert_eq!(mcp["mcpServers"]["gridterm"]["args"], json!(["mcp"]));
@@ -169,11 +205,18 @@ fn generated_files_and_shell_environment() {
         "ZDOTDIR" => Some("/home/me/zdot".into()),
         _ => None,
     });
-    assert_eq!(get(&zsh, "CLAUDE_CODE_PLUGIN_DIRS"), Some(format!("/mine:{}", files.plugin_dir.display())), "user value kept first");
+    assert_eq!(
+        get(&zsh, "CLAUDE_CODE_PLUGIN_DIRS"),
+        Some(format!("/mine:{}", files.plugin_dir.display())),
+        "user value kept first"
+    );
     assert_eq!(get(&zsh, "ZDOTDIR"), Some(files.zsh_dir.display().to_string()));
     assert_eq!(get(&zsh, "GRIDTERM_USER_ZDOTDIR"), Some("/home/me/zdot".into()));
     let bash = shell_env(&files, "/bin/bash", |_| None);
-    assert_eq!(get(&bash, "CLAUDE_CODE_PLUGIN_DIRS"), Some(files.plugin_dir.display().to_string()));
+    assert_eq!(
+        get(&bash, "CLAUDE_CODE_PLUGIN_DIRS"),
+        Some(files.plugin_dir.display().to_string())
+    );
     assert_eq!(get(&bash, "ZDOTDIR"), None, "no zsh integration for other shells");
 }
 
@@ -206,7 +249,9 @@ fn zsh_integration_keeps_user_files_and_wraps_agents() {
     };
     fake("omp", "USAGE\n  $ omp [COMMAND]\n\nCOMMANDS\n  config   Manage configuration\n  models   List models\n\nFLAGS\n  --model");
     fake("copilot", "Usage: copilot [options] [command]\n\nCommands:\n  mcp          Manage MCP servers\n  update       Update\n\nOptions:\n  -p");
-    let env = shell_env(&files, "/bin/zsh", |k| (k == "ZDOTDIR").then(|| user.display().to_string()));
+    let env = shell_env(&files, "/bin/zsh", |k| {
+        (k == "ZDOTDIR").then(|| user.display().to_string())
+    });
     let script = "omp; omp hola; omp config get x; copilot; copilot -p hola; copilot mcp list; copilot update; \
                   echo \"ZDOTDIR=$ZDOTDIR\" >> $LOG; whence -w omp copilot >> $LOG";
     let status = Command::new("/bin/zsh")
@@ -219,7 +264,11 @@ fn zsh_integration_keeps_user_files_and_wraps_agents() {
         .status()
         .unwrap();
     assert!(status.success());
-    let lines: Vec<String> = std::fs::read_to_string(&log).unwrap().lines().map(str::to_owned).collect();
+    let lines: Vec<String> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
     let plugin = format!("--plugin-dir {}", files.plugin_dir.display());
     let mcp = format!("--additional-mcp-config @{}", files.copilot_config.display());
     let expected = vec![

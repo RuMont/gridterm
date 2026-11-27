@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Plan case Gi13: status of a 10k-file repo in < 100 ms.
 //! Run with: cargo test --release -p git_client --test perf -- --ignored --nocapture
 

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Plan case S6: 100k files indexed in < 1 s, each keystroke settles in < 16 ms.
 //! Run with: cargo test --release -p fs_tools --test perf -- --ignored --nocapture
 
@@ -40,14 +42,8 @@ fn s6_index_100k_files_and_keystroke_latency() {
         "indexed 100k in {indexed:?}; worst keystroke {worst:?}; top = {:?}",
         top.first().map(|h| &h.rel_path)
     );
-    assert!(
-        indexed < Duration::from_secs(1),
-        "indexing took {indexed:?}"
-    );
-    assert!(
-        worst < Duration::from_millis(16),
-        "worst keystroke {worst:?}"
-    );
+    assert!(indexed < Duration::from_secs(1), "indexing took {indexed:?}");
+    assert!(worst < Duration::from_millis(16), "worst keystroke {worst:?}");
     assert_eq!(top[0].rel_path, "module_042/file_0999.rs");
 
     // Re-ranking by file name (every file name matches "file", so the
@@ -63,5 +59,8 @@ fn s6_index_100k_files_and_keystroke_latency() {
         assert_eq!(hits.len(), 50);
     }
     eprintln!("results(0, 50) with 100k name matches: worst {worst_results:?}");
-    assert!(worst_results < Duration::from_millis(4), "results took {worst_results:?}");
+    assert!(
+        worst_results < Duration::from_millis(4),
+        "results took {worst_results:?}"
+    );
 }
