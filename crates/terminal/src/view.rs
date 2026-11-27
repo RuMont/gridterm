@@ -106,6 +106,30 @@ pub struct HoveredLink {
     pub target: LinkTarget,
 }
 
+/// Scrollbar over the right edge of the grid, drawn like gpui-kit's (the
+/// file viewer's): a 16 px track, a 6 px thumb (8 px under the pointer).
+const SCROLLBAR_TRACK: f32 = 16.0;
+const SCROLLBAR_THUMB: f32 = 6.0;
+const SCROLLBAR_THUMB_HOT: f32 = 8.0;
+const SCROLLBAR_INSET: f32 = 4.0;
+const SCROLLBAR_MIN_THUMB: f32 = 48.0;
+/// How long the scrollbar stays after the view scrolled.
+const SCROLLBAR_LINGER: Duration = Duration::from_millis(1500);
+
+/// Vertical extent of the scrollbar thumb in `track`, for a history of
+/// `history` lines of which the view is `display_offset` above the bottom.
+fn scrollbar_thumb(track: Bounds<Pixels>, line_height: f32, history: usize, display_offset: usize) -> Option<(f32, f32)> {
+    if history == 0 {
+        return None;
+    }
+    let track_h = f32::from(track.size.height);
+    let total = track_h + history as f32 * line_height;
+    let len = (track_h * track_h / total).max(SCROLLBAR_MIN_THUMB).min(track_h);
+    let above = history.saturating_sub(display_offset) as f32;
+    let top = f32::from(track.top()) + (track_h - len) * above / history as f32;
+    Some((top, len))
+}
+
 /// Rows of a wrapped logical line considered when looking for links.
 const MAX_WRAPPED_ROWS: i32 = 16;
 
@@ -120,6 +144,8 @@ struct Metrics {
 struct PaintedGeometry {
     origin: Point<Pixels>,
     metrics: Option<Metrics>,
+    /// The whole grid area, padding included.
+    bounds: Bounds<Pixels>,
 }
 
 pub struct TerminalView {
@@ -142,6 +168,14 @@ pub struct TerminalView {
     selecting: bool,
     /// Cell of the last motion report sent to the program (one per cell).
     last_motion_cell: Option<GridPoint>,
+    /// The pointer is over the scrollbar's strip at the right edge.
+    near_scrollbar: bool,
+    /// Last time the view moved through the history (wheel, keys, bar).
+    scrolled_at: Option<Instant>,
+    /// Dragging the scrollbar thumb: where it was grabbed, from its top.
+    thumb_grab: Option<f32>,
+    /// Redraw that hides the scrollbar once it has lingered.
+    scrollbar_hide: Option<Task<()>>,
     created_at: std::time::Instant,
     first_output: bool,
     render_count: u64,
@@ -272,6 +306,10 @@ impl TerminalView {
             scroll_acc: 0.0,
             selecting: false,
             last_motion_cell: None,
+            near_scrollbar: false,
+            scrolled_at: None,
+            thumb_grab: None,
+            scrollbar_hide: None,
             created_at: std::time::Instant::now(),
             first_output: false,
             render_count: 0,
@@ -391,6 +429,94 @@ impl TerminalView {
 
     pub fn display_offset(&self) -> usize {
         self.term.lock().grid().display_offset()
+    }
+
+    /// Back to the live screen.
+    pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.term.lock().scroll_display(Scroll::Bottom);
+        cx.notify();
+    }
+
+    /// Lines of scrollback above the screen.
+    pub fn history_size(&self) -> usize {
+        self.term.lock().grid().history_size()
+    }
+
+    /// Window bounds of the grid as last painted, padding included.
+    pub fn grid_bounds(&self) -> Bounds<Pixels> {
+        self.geometry.get().bounds
+    }
+
+    /// The scrollbar shows while it is useful: the pointer at the right
+    /// edge, a drag, a recent scroll, or the view scrolled back. Following
+    /// the output it stays hidden, so new lines do not flash it.
+    pub fn scrollbar_shown(&self) -> bool {
+        self.thumb_grab.is_some()
+            || self.near_scrollbar
+            || self.scrolled_at.is_some_and(|t| t.elapsed() < SCROLLBAR_LINGER)
+            || self.display_offset() > 0
+    }
+
+    /// The scrollbar's track (the strip at the right edge) and thumb
+    /// (top, length), when there is history to scroll.
+    fn scrollbar_layout(&self) -> Option<(Bounds<Pixels>, f32, f32)> {
+        let geo = self.geometry.get();
+        let m = geo.metrics?;
+        let b = geo.bounds;
+        let track = Bounds::new(point(b.right() - px(SCROLLBAR_TRACK), b.top()), gpui_kit::size(px(SCROLLBAR_TRACK), b.size.height));
+        let (history, offset) = {
+            let term = self.term.lock();
+            (term.grid().history_size(), term.grid().display_offset())
+        };
+        let (top, len) = scrollbar_thumb(track, m.line_height, history, offset)?;
+        Some((track, top, len))
+    }
+
+    /// Scrolls so the thumb's top sits at `y` (window coordinates).
+    fn scroll_to_thumb_top(&mut self, y: f32, cx: &mut Context<Self>) {
+        let Some((track, _, len)) = self.scrollbar_layout() else { return };
+        let room = f32::from(track.size.height) - len;
+        let fraction = if room > 0.0 { ((y - f32::from(track.top())) / room).clamp(0.0, 1.0) } else { 1.0 };
+        let mut term = self.term.lock();
+        let history = term.grid().history_size();
+        let above = (fraction * history as f32).round() as usize;
+        let delta = (history - above.min(history)) as i32 - term.grid().display_offset() as i32;
+        if delta != 0 {
+            term.scroll_display(Scroll::Delta(delta));
+        }
+        drop(term);
+        self.mark_scrolled(cx);
+    }
+
+    /// Shows the scrollbar for a while after the view moved.
+    fn mark_scrolled(&mut self, cx: &mut Context<Self>) {
+        self.scrolled_at = Some(Instant::now());
+        self.scrollbar_hide = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SCROLLBAR_LINGER + Duration::from_millis(50)).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }));
+        cx.notify();
+    }
+
+    /// A press on the visible scrollbar: grabs the thumb, or jumps there
+    /// (centring the thumb on the click) and keeps dragging.
+    fn press_scrollbar(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        if !self.scrollbar_shown() {
+            return false;
+        }
+        let Some((track, top, len)) = self.scrollbar_layout() else { return false };
+        if !track.contains(&position) {
+            return false;
+        }
+        let y = f32::from(position.y);
+        if y >= top && y <= top + len {
+            self.thumb_grab = Some(y - top);
+        } else {
+            self.thumb_grab = Some(len / 2.0);
+            self.scroll_to_thumb_top(y - len / 2.0, cx);
+        }
+        cx.notify();
+        true
     }
 
     pub fn settings(&self) -> &TerminalSettings {
@@ -765,7 +891,7 @@ impl TerminalView {
 
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
         self.term.lock().scroll_display(scroll);
-        cx.notify();
+        self.mark_scrolled(cx);
     }
 
     fn grid_point(&self, position: Point<Pixels>) -> Option<(GridPoint, Side)> {
@@ -894,6 +1020,9 @@ impl TerminalView {
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle, cx);
+        if self.press_scrollbar(event.position, cx) {
+            return;
+        }
         if event.modifiers.platform {
             if let Some(link) = self.link_at(event.position) {
                 self.open_link(link, cx);
@@ -922,6 +1051,19 @@ impl TerminalView {
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.last_mouse = Some(event.position);
+        let bounds = self.geometry.get().bounds;
+        let near = bounds.contains(&event.position) && event.position.x >= bounds.right() - px(SCROLLBAR_TRACK);
+        if near != self.near_scrollbar {
+            self.near_scrollbar = near;
+            cx.notify();
+        }
+        if let Some(grab) = self.thumb_grab {
+            if event.pressed_button == Some(MouseButton::Left) {
+                self.scroll_to_thumb_top(f32::from(event.position.y) - grab, cx);
+                return;
+            }
+            self.thumb_grab = None;
+        }
         let link = if event.modifiers.platform && event.pressed_button.is_none() { self.link_at(event.position) } else { None };
         self.set_hovered_link(link, cx);
         if !self.selecting && self.mouse_mode(event.modifiers.shift) && self.reports_drags() {
@@ -957,6 +1099,10 @@ impl TerminalView {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.thumb_grab.take().is_some() {
+            self.mark_scrolled(cx);
+            return;
+        }
         if self.selecting {
             self.selecting = false;
             {
@@ -1003,7 +1149,7 @@ impl TerminalView {
             self.write(seq.repeat(lines.unsigned_abs() as usize));
         } else {
             self.term.lock().scroll_display(Scroll::Delta(lines));
-            cx.notify();
+            self.mark_scrolled(cx);
         }
     }
 
@@ -1049,6 +1195,14 @@ impl TerminalView {
         let cursor_visible = self.blink_visible || !focused;
         let hovered = self.hovered_link.clone();
         let marked = self.marked_text.clone();
+        let scrollbar = self.scrollbar_shown().then(|| self.scrollbar_layout()).flatten().map(|(track, top, len)| {
+            let hot = self.thumb_grab.is_some() || self.near_scrollbar;
+            let width = if hot { SCROLLBAR_THUMB_HOT } else { SCROLLBAR_THUMB };
+            let x = track.right() - px(SCROLLBAR_INSET + width);
+            let mut color: Hsla = rgb(palette().foreground).into();
+            color.a = if hot { 0.55 } else { 0.35 };
+            (Bounds::new(point(x, px(top)), gpui_kit::size(px(width), px(len))), color)
+        });
 
         canvas(
             move |bounds, window, cx| {
@@ -1061,7 +1215,7 @@ impl TerminalView {
                     Metrics { cell_width, line_height: (settings.font_size * settings.line_height).round() }
                 });
                 let origin = bounds.origin + point(px(PADDING), px(PADDING / 2.0));
-                geometry.set(PaintedGeometry { origin, metrics: Some(metrics) });
+                geometry.set(PaintedGeometry { origin, metrics: Some(metrics), bounds });
 
                 let width = f32::from(bounds.size.width) - 2.0 * PADDING;
                 let height = f32::from(bounds.size.height) - PADDING;
@@ -1121,6 +1275,9 @@ impl TerminalView {
                 }
                 if let Some((origin, line)) = plan.marked {
                     let _ = line.paint(origin, px(plan.line_height), TextAlign::Left, None, window, cx);
+                }
+                if let Some((thumb, color)) = scrollbar {
+                    window.paint_quad(fill(thumb, color));
                 }
             },
         )
@@ -1354,11 +1511,23 @@ impl Render for TerminalView {
                     .id("terminal-grid")
                     .flex_1()
                     .min_h_0()
-                    .cursor(if self.hovered_link.is_some() { CursorStyle::PointingHand } else { CursorStyle::IBeam })
+                    .cursor(if self.hovered_link.is_some() {
+                        CursorStyle::PointingHand
+                    } else if (self.near_scrollbar || self.thumb_grab.is_some()) && self.history_size() > 0 {
+                        CursorStyle::Arrow
+                    } else {
+                        CursorStyle::IBeam
+                    })
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
                     .on_mouse_move(cx.listener(Self::on_mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
                     .on_scroll(cx.listener(Self::on_scroll))
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        if !hovered && this.near_scrollbar {
+                            this.near_scrollbar = false;
+                            cx.notify();
+                        }
+                    }))
                     .child(self.render_grid(window, cx))
                     .when(self.exited, |el| {
                         el.child(
@@ -1497,5 +1666,26 @@ impl TerminalView {
             geo.origin + point(px(cursor.column.0 as f32 * m.cell_width), px(row as f32 * m.line_height)),
             size(px(m.cell_width), px(m.line_height)),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{scrollbar_thumb, SCROLLBAR_MIN_THUMB};
+    use gpui_kit::{point, px, Bounds};
+
+    #[test]
+    fn scrollbar_thumb_follows_the_display_offset() {
+        let track = Bounds::new(point(px(0.), px(100.)), gpui_kit::size(px(16.), px(400.)));
+        assert_eq!(scrollbar_thumb(track, 20.0, 0, 0), None, "no history, no bar");
+        // 20 rows on screen, 380 above: the thumb is 400·400/8000 → the minimum.
+        let (bottom, len) = scrollbar_thumb(track, 20.0, 380, 0).unwrap();
+        assert_eq!(len, SCROLLBAR_MIN_THUMB);
+        assert_eq!(bottom + len, 500.0, "following the output: at the bottom");
+        let (top, _) = scrollbar_thumb(track, 20.0, 380, 380).unwrap();
+        assert_eq!(top, 100.0, "at the oldest line: at the top");
+        // Little history: a long thumb.
+        let (_, len) = scrollbar_thumb(track, 20.0, 5, 0).unwrap();
+        assert_eq!(len, 400.0 * 400.0 / 500.0);
     }
 }

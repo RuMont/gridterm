@@ -6,7 +6,7 @@ Las terminales se colocan en un grid que se expande dentro de la ventana: primer
 
 - **Git**: staging, commit, deshacer el último commit local, revertir un commit ya subido (con push), push y pull. El History es un git graph compacto de todas las ramas locales y remotas y los tags (líneas de 1 px, carriles de 8 px, hasta 24 carriles visibles): punto relleno = commit pusheado, punto hueco = solo local, anillo exterior = HEAD; chips con las ramas y tags de cada commit (la rama actual resaltada). Revertir solo se ofrece en commits pusheados de la historia de HEAD.
 - **Explorer**: árbol de carpetas y archivos, y búsqueda por contenido. Los archivos se abren en un visor de solo lectura con resaltado de sintaxis, como pestañas de la terminal activa.
-- **File Search** (⌘P): búsqueda fuzzy por nombre, en una paleta flotante (también disponible como panel del sidebar).
+- **File Search** (⌘P): búsqueda fuzzy por nombre, en una paleta flotante (también disponible como panel del sidebar). Al abrirse, el texto de la búsqueda anterior queda seleccionado: escribir lo reemplaza. Igual en la búsqueda por contenido (⇧⌘F); si hay texto seleccionado en la celda, ese texto pasa a ser la búsqueda.
 
 ## Ejecutar
 
@@ -59,6 +59,8 @@ Al salir se guarda la sesión (grid, cwd y pestañas fijadas de cada terminal, t
 | ⌘C / ⌘V / ⌘K | Copiar selección / pegar / limpiar (en una terminal). Con solo una imagen en el portapapeles, ⌘V envía ctrl+V al programa en primer plano (así Claude Code pega la imagen); en la shell no hace nada |
 | Arrastrar, doble o triple clic | Seleccionar texto, también dentro de programas que solo reciben clics. Los que siguen el ratón (Claude Code a pantalla completa, vim con `mouse=a`, tmux) reciben el arrastre y seleccionan ellos: Claude Code resalta y copia al soltar (OSC 52). Con ⇧, selecciona gridterm |
 | ⇧PgUp / ⇧PgDn, ⌘Home / ⌘End | Scroll del historial |
+| (barra de scroll de la terminal) | Aparece al acercar el ratón al borde derecho, al hacer scroll o mientras se está viendo el historial; mientras la terminal sigue la salida no se muestra. Un clic en la pista salta a ese punto y el thumb se arrastra |
+| ⌥← / ⌥→, ⌥⌫ / ⌥⌦, ⌘← / ⌘→, ⌘⌫ | En la línea de la shell, como en macOS: palabra anterior/siguiente, borrar palabra, inicio/fin de línea, borrar la línea (envían `ESC b`/`ESC f`, `ESC DEL`/`ESC d`, `^A`/`^E`, `^U`, con «Option como Meta» activado o no) |
 
 Todos estos atajos (salvo Esc, Tab y ⌘Q) se pueden cambiar en Ajustes → Keyboard shortcuts…: clic en el atajo de una acción y pulsar la combinación nueva (necesita ⌘, ⌃ o ⌥, o una tecla F; Esc cancela). Si otra acción del mismo ámbito ya la tenía, se le quita y se avisa. Los cambios se aplican al momento y se guardan en `~/.config/gridterm/keymap.toml` (solo lo que difiere de los atajos por defecto; ↺ devuelve una acción a su atajo por defecto y Reset all, todas). Los tooltips muestran el atajo vigente.
 

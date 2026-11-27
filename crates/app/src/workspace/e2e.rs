@@ -1403,6 +1403,52 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         Ok("ok".into())
     });
 
+    case!(r, "S9", "⌘P y ⌘⇧F seleccionan el texto del buscador al abrirse; con texto seleccionado en la celda, ⌘⇧F lo usa", {
+        r.key("cmd-1");
+        r.run("clear");
+        r.sleep(200).await;
+        // Palette: closed with text in it, reopened with the text selected.
+        r.key("cmd-p");
+        r.with(|ws, w, cx| ws.search.update(cx, |s, cx| s.input.update(cx, |i, cx| i.set_value("guide", w, cx))));
+        r.key("escape");
+        r.sleep(100).await;
+        r.key("cmd-p");
+        r.sleep(100).await;
+        let palette = r.read(|ws, cx| ws.search.read(cx).input.read(cx).selected_range());
+        r.key("escape");
+        // Content search, no selection in the cell: its text selected.
+        r.with(|ws, w, cx| ws.explorer.update(cx, |e, cx| e.query.update(cx, |q, cx| q.set_value("needle", w, cx))));
+        r.key("cmd-1");
+        r.sleep(100).await;
+        r.key("cmd-shift-f");
+        r.sleep(100).await;
+        let content = r.read(|ws, cx| ws.explorer.read(cx).query.read(cx).selected_range());
+        // With a selection in the terminal, it replaces the query.
+        r.key("escape");
+        r.key("cmd-1");
+        r.run("echo S9WORD");
+        r.wait_text(0, "S9WORD", 2000).await;
+        r.sleep(200).await;
+        let from = r.find_in_terminal(0, "S9WORD").ok_or("text not on screen")?;
+        // A double click selects the word.
+        let none = Modifiers::default();
+        r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: from, modifiers: none, click_count: 2, first_mouse: false }));
+        r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: from, modifiers: none, click_count: 2 }));
+        r.sleep(100).await;
+        r.key("cmd-shift-f");
+        r.sleep(100).await;
+        let (seeded, seeded_sel) = r.read(|ws, cx| {
+            let q = ws.explorer.read(cx).query.read(cx);
+            (q.value().to_string(), q.selected_range())
+        });
+        r.key("escape");
+        r.run("clear");
+        ensure!(palette == (0..5), "palette reopened with selection {palette:?} (want 0..5)");
+        ensure!(content == (0..6), "content search focused with selection {content:?} (want 0..6)");
+        ensure!(seeded == "S9WORD" && seeded_sel == (0..6), "with a terminal selection: {seeded:?} {seeded_sel:?}");
+        Ok("paleta 0..5 · contenido 0..6 · selección S9WORD".into())
+    });
+
     case!(r, "S8", "↩ en la paleta abre el archivo como pestaña de la celda activa (no inserta la ruta)", {
         r.key("cmd-1");
         r.run("clear");
@@ -1680,6 +1726,103 @@ async fn main_phase(r: &mut Runner<'_>, fx: &Fixture) {
         ensure!(screen.contains("[<35;"), "no hover report under ?1003h:\n{screen}");
         ensure!(sel.is_none(), "gridterm selected {sel:?} although the program handles the drag");
         Ok("pulsar, arrastrar (32), mover (35) y soltar llegan al programa".into())
+    });
+
+    case!(r, "T14", "Edición de línea como en macOS: ⌥←/⌥→ por palabras, ⌥⌫ borra palabra, ⌘←/⌘→ inicio/fin, ⌘⌫ borra la línea", {
+        r.key("cmd-1");
+        r.run("clear");
+        r.sleep(300).await;
+        // ⌥← twice: before "bb"; X goes there.
+        r.type_text("echo T14A aa bb");
+        r.key("alt-left");
+        r.type_text("X");
+        r.key("enter");
+        // ⌥⌫ deletes "dos".
+        r.type_text("echo T14B uno dos");
+        r.key("alt-backspace");
+        r.type_text("tres");
+        r.key("enter");
+        // ⌘← to the start: the missing "e" of echo.
+        r.type_text("cho T14C");
+        r.key("cmd-left");
+        r.type_text("e");
+        r.key("cmd-right");
+        r.type_text("_end");
+        r.key("enter");
+        // ⌘⌫ drops the whole line.
+        r.type_text("garbage words");
+        r.key("cmd-backspace");
+        r.type_text("echo T14D");
+        r.key("enter");
+        let ok = r.wait_text(0, "T14D", 3000).await;
+        r.sleep(300).await;
+        let text = r.term_text(0);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        r.run("clear");
+        ok.ok_or_else(|| format!("no output:\n{text}"))?;
+        let want = ["T14A aa Xbb", "T14B uno tres", "T14C_end", "T14D"];
+        let missing: Vec<&str> = want.iter().copied().filter(|w| !lines.contains(w)).collect();
+        ensure!(missing.is_empty(), "missing {missing:?} in:\n{text}");
+        Ok("aa Xbb · uno tres · T14C_end · T14D".into())
+    });
+
+    case!(r, "SB1", "Barra de scroll de la terminal: aparece en el borde derecho; clic en la pista salta y el thumb se arrastra", {
+        r.key("cmd-1");
+        let shell = |r: &mut Runner<'_>, cmd: &'static str| r.with(move |ws, _, cx| ws.terminals[0].update(cx, |t, _| t.write(cmd)));
+        shell(r, "clear; seq 1 400\r");
+        r.wait_text(0, "400", 3000).await.ok_or("seq did not run")?;
+        r.sleep(200).await;
+        let (history, b) = r.read(|ws, cx| {
+            let t = ws.terminals[0].read(cx);
+            (t.history_size(), t.grid_bounds())
+        });
+        let x = b.right() - px(6.);
+        let top = point(x, b.top() + px(4.));
+        let bottom = point(x, b.bottom() - px(4.));
+        let none = Modifiers::default();
+        let left = Some(MouseButton::Left);
+        let click = |r: &mut Runner<'_>, pos: Point<Pixels>| {
+            r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: pos, modifiers: none, click_count: 1, first_mouse: false }));
+            r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: pos, modifiers: none, click_count: 1 }));
+        };
+        let offset = |r: &mut Runner<'_>| r.read(|ws, cx| ws.terminals[0].read(cx).display_offset());
+        let shown = |r: &mut Runner<'_>| r.read(|ws, cx| ws.terminals[0].read(cx).scrollbar_shown());
+        // Following the output it is hidden: a click there is the terminal's.
+        let hidden_before = !shown(r);
+        click(r, top);
+        r.next_frame().await;
+        let before_hover = offset(r);
+        // The pointer at the edge shows it.
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: top, pressed_button: None, modifiers: none }));
+        r.next_frame().await;
+        let shown_on_hover = shown(r);
+        r.shot("SB1-scrollbar");
+        click(r, top);
+        r.next_frame().await;
+        let at_top = offset(r);
+        let selection = r.read(|ws, cx| ws.terminals[0].read(cx).selection_text());
+        click(r, bottom);
+        r.next_frame().await;
+        let at_bottom = offset(r);
+        // Drag the thumb from the bottom to the middle.
+        r.mouse(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: bottom, modifiers: none, click_count: 1, first_mouse: false }));
+        let middle = point(x, b.center().y);
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: middle, pressed_button: left, modifiers: none }));
+        r.mouse(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: middle, modifiers: none, click_count: 1 }));
+        r.next_frame().await;
+        let dragged = offset(r);
+        r.mouse(PlatformInput::MouseMove(MouseMoveEvent { position: b.center(), pressed_button: None, modifiers: none }));
+        r.with(|ws, _, cx| ws.terminals[0].update(cx, |t, cx| t.scroll_to_bottom(cx)));
+        shell(r, "clear\r");
+        ensure!(history > 0, "no scrollback after seq");
+        ensure!(hidden_before, "shown while following the output");
+        ensure!(before_hover == 0, "a click where the hidden bar would be scrolled ({before_hover})");
+        ensure!(shown_on_hover, "not shown with the pointer at the right edge");
+        ensure!(at_top == history, "click at the top of the track: offset {at_top}, history {history}");
+        ensure!(selection.as_deref().is_none_or(str::is_empty), "the click also selected text: {selection:?}");
+        ensure!(at_bottom == 0, "click at the bottom of the track: offset {at_bottom}");
+        ensure!(dragged > history / 4 && dragged < history * 3 / 4, "dragging the thumb to the middle: offset {dragged} of {history}");
+        Ok(format!("historial {history}: arriba {at_top}, abajo {at_bottom}, arrastre a la mitad {dragged}"))
     });
 
     case!(r, "CC3", "Tab y ⇧Tab llegan al programa (modos de Claude Code) y no mueven el foco", {

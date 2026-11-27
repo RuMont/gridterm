@@ -198,8 +198,12 @@ impl ExplorerPanel {
         cx.notify();
     }
 
+    /// Focuses the query with its text selected, so typing replaces it.
     pub fn focus_content_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.query.update(cx, |q, cx| q.focus(window, cx));
+        self.query.update(cx, |q, cx| {
+            q.focus(window, cx);
+            q.select_all(window, cx);
+        });
     }
 
     /// ⌘⇧F with text selected: searches for it right away, with the query

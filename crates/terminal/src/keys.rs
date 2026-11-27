@@ -44,6 +44,9 @@ fn tilde(k: &KeyInput, code: u8) -> Vec<u8> {
 /// Returns the bytes to write to the PTY, or `None` when the key should be
 /// left to the application (e.g. Cmd shortcuts).
 pub fn to_esc(k: &KeyInput, mode: TermMode, option_as_meta: bool) -> Option<Vec<u8>> {
+    if let Some(bytes) = mac_text_editing(k) {
+        return Some(bytes.to_vec());
+    }
     if k.cmd {
         return None;
     }
@@ -98,6 +101,26 @@ pub fn to_esc(k: &KeyInput, mode: TermMode, option_as_meta: bool) -> Option<Vec<
         }
     };
     Some(seq)
+}
+
+/// macOS text editing, as Terminal.app, iTerm2 and Ghostty send it whether
+/// or not Option is Meta: ⌥←/⌥→ move a word, ⌥⌫/⌥⌦ delete one, ⌘←/⌘→ go
+/// to the start/end of the line and ⌘⌫ deletes it. Shells and readline bind
+/// these (`ESC b`, `ESC f`, `ESC DEL`, `ESC d`, `^A`, `^E`, `^U`); xterm's
+/// `CSI 1;3D` for ⌥← is not bound by default in zsh or bash.
+fn mac_text_editing(k: &KeyInput) -> Option<&'static [u8]> {
+    let only_alt = k.alt && !k.cmd && !k.ctrl && !k.shift;
+    let only_cmd = k.cmd && !k.alt && !k.ctrl && !k.shift;
+    Some(match k.key {
+        "left" if only_alt => b"\x1bb",
+        "right" if only_alt => b"\x1bf",
+        "backspace" if only_alt => b"\x1b\x7f",
+        "delete" if only_alt => b"\x1bd",
+        "left" if only_cmd => b"\x01",
+        "right" if only_cmd => b"\x05",
+        "backspace" if only_cmd => b"\x15",
+        _ => return None,
+    })
 }
 
 fn ctrl_char(k: &KeyInput) -> Option<u8> {
@@ -181,7 +204,7 @@ mod tests {
     fn modifiers() {
         assert_eq!(esc(KeyInput { ctrl: true, ..key("c") }), Some(vec![3]));
         assert_eq!(esc(KeyInput { alt: true, key_char: Some("ß"), ..key("s") }), Some(b"\x1bs".to_vec()));
-        assert_eq!(esc(KeyInput { key: "left", alt: true, ..Default::default() }), Some(b"\x1b[1;3D".to_vec()));
+        assert_eq!(esc(KeyInput { key: "left", alt: true, shift: true, ..Default::default() }), Some(b"\x1b[1;4D".to_vec()));
         assert_eq!(esc(KeyInput { key: "tab", shift: true, ..Default::default() }), Some(b"\x1b[Z".to_vec()));
         assert_eq!(esc(KeyInput { cmd: true, ..key("c") }), None);
     }
@@ -229,6 +252,24 @@ mod tests {
         assert!(!is_text_input(&k("c", Some("c"), false, true), false), "ctrl-c is a control key");
         assert!(!is_text_input(&k("enter", Some("\n"), false, false), false));
         assert!(!is_text_input(&k("up", None, false, false), false));
+    }
+
+    /// ⌥/⌘ + arrows and backspace edit the line as on macOS, with Option as
+    /// Meta on or off (off: the Spanish layout still types @ with ⌥2).
+    #[test]
+    fn mac_line_editing() {
+        for meta in [false, true] {
+            let k = |key, alt, cmd| to_esc(&KeyInput { key, alt, cmd, ..Default::default() }, TermMode::empty(), meta).unwrap();
+            assert_eq!(k("left", true, false), b"\x1bb", "⌥← (meta {meta})");
+            assert_eq!(k("right", true, false), b"\x1bf");
+            assert_eq!(k("backspace", true, false), b"\x1b\x7f");
+            assert_eq!(k("delete", true, false), b"\x1bd");
+            assert_eq!(k("left", false, true), b"\x01");
+            assert_eq!(k("right", false, true), b"\x05");
+            assert_eq!(k("backspace", false, true), b"\x15");
+        }
+        // Other ⌘ keys stay with the app (⌘C, ⌘V…).
+        assert_eq!(esc(KeyInput { key: "up", cmd: true, ..Default::default() }), None);
     }
 
     #[test]

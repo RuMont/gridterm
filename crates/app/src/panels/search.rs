@@ -92,8 +92,12 @@ impl SearchPanel {
         }
     }
 
+    /// Focuses the query with its text selected, so typing replaces it.
     pub fn focus_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.input.update(cx, |i, cx| i.focus(window, cx));
+        self.input.update(cx, |i, cx| {
+            i.focus(window, cx);
+            i.select_all(window, cx);
+        });
     }
 
     /// Changes the file cap; re-indexes the active root if it changed.
