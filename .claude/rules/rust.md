@@ -17,7 +17,7 @@ Aplican al código nuevo y al que se toque. No reescribas código existente solo
 - `match` exhaustivo sobre enums propios: evita `_ =>` para que una variante nueva rompa la compilación donde importa.
 
 ## Errores
-- En código de producción, nada de `unwrap()`. Si es una invariante real, `expect("por qué no puede fallar")`. En tests `unwrap()` está bien.
+- En código de producción, nada de `unwrap()` (clippy lo rechaza). Si es una invariante real, `expect("por qué no puede fallar")`; mejor aún, reestructura para que el `Option`/`Result` no exista (`let ... else`, `get_or_insert_with`, `LazyLock` para regex estáticas). En tests, `benches/` y el harness e2e `unwrap()` está permitido.
 - Propaga con `?` y añade contexto con `anyhow::Context` (`.with_context(|| format!("reading {}", path.display()))`).
 - No descartes errores en silencio: `let _ = ...` o `.ok()` solo si ignorar el fallo es intencionado; si no es obvio, comenta por qué o regístralo con `log::warn!`.
 - Diagnóstico interno con `log` (`debug!`, `warn!`, `error!`), no con `println!`/`eprintln!`. `eprintln!` sí vale para mensajes dirigidos al usuario en la CLI (`external.rs`, binarios en `src/bin/`) y en el harness e2e.
@@ -55,6 +55,10 @@ Aplican al código nuevo y al que se toque. No reescribas código existente solo
 - Cada bug corregido lleva un test que lo reproduzca si es razonable.
 
 ## Antes de dar algo por terminado
-- `cargo fmt --all`
-- `cargo clippy --workspace --all-targets` sin warnings nuevos
-- `cargo test` del crate tocado (o `--workspace` si el cambio cruza crates)
+- `cargo fmt --all` (`rustfmt.toml`: `max_width = 120`).
+- `cargo clippy --workspace --all-targets` sin warnings. Los lints viven en `[workspace.lints]` del `Cargo.toml` raíz: `unwrap_used`, `undocumented_unsafe_blocks`, `dbg_macro`, `todo` y `unimplemented` son `deny`. No los silencies con `#[allow]` sin un comentario que lo justifique.
+- Si tocas `crates/app/src/workspace/e2e.rs`: `cargo clippy -p gridterm --features e2e`.
+- `cargo test` del crate tocado (o `--workspace` si el cambio cruza crates).
+- Si añades o actualizas dependencias: `cargo deny check` (licencias permitidas en `deny.toml`).
+- Cobertura: `cargo cov-summary` (o `cargo cov` para el HTML en `target/llvm-cov/html`).
+- El hook `scripts/git-hooks/pre-commit` ejecuta fmt y clippy sobre los crates del commit (`git config core.hooksPath scripts/git-hooks`).

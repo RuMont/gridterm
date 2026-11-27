@@ -1,0 +1,5 @@
+[alias]
+# Coverage report: target/llvm-cov/html/index.html (needs cargo-llvm-cov).
+cov = "llvm-cov --workspace --html"
+# Summary table in the terminal.
+cov-summary = "llvm-cov --workspace --summary-only"

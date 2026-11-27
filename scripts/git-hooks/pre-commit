@@ -1,0 +1,32 @@
+#!/bin/sh
+# rustfmt + clippy on the crates touched by this commit.
+# Enable once per clone:  git config core.hooksPath scripts/git-hooks
+# Skip once:              git commit --no-verify
+set -eu
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+echo "$staged" | grep -qE '(\.rs|Cargo\.toml|Cargo\.lock|clippy\.toml|rustfmt\.toml)$' || exit 0
+
+echo "pre-commit: cargo fmt --check"
+cargo fmt --all --check || { echo "pre-commit: run 'cargo fmt --all'"; exit 1; }
+
+# Workspace-wide config changed: check everything.
+if echo "$staged" | grep -qE '^(Cargo\.toml|Cargo\.lock|clippy\.toml|rustfmt\.toml)$'; then
+    pkgs="--workspace"
+else
+    pkgs=""
+    for dir in $(echo "$staged" | sed -n 's#^crates/\([^/]*\)/.*#\1#p' | sort -u); do
+        [ -f "crates/$dir/Cargo.toml" ] || continue
+        name=$(sed -n 's/^name *= *"\(.*\)"/\1/p' "crates/$dir/Cargo.toml" | head -1)
+        pkgs="$pkgs -p $name"
+    done
+    [ -n "$pkgs" ] || exit 0
+fi
+
+# The e2e runner only compiles with its feature.
+features=""
+echo "$staged" | grep -q '^crates/app/src/workspace/e2e\.rs$' && features="--features gridterm/e2e"
+
+echo "pre-commit: cargo clippy $pkgs $features"
+# shellcheck disable=SC2086
+cargo clippy $pkgs $features --all-targets --quiet -- -D warnings
