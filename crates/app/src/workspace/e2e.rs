@@ -7,6 +7,9 @@
 //!
 //! `GRIDTERM_E2E_PHASE=restore` runs only the session-restore checks.
 
+// A test harness: unwrap() is how its checks fail.
+#![allow(clippy::unwrap_used)]
+
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -446,8 +449,10 @@ impl Runner<'_> {
 }
 
 fn process_start() -> Option<std::time::SystemTime> {
+    // SAFETY: proc_bsdinfo is a plain C struct; all-zero bytes are a valid value.
     let mut info: libc_bsdinfo::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc_bsdinfo::proc_bsdinfo>() as i32;
+    // SAFETY: `info` is a properly sized, writable proc_bsdinfo and `size` matches it.
     let n = unsafe {
         libc_bsdinfo::proc_pidinfo(
             std::process::id() as i32,
@@ -467,6 +472,7 @@ mod libc_bsdinfo {
 }
 
 fn pid_alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
@@ -8417,6 +8423,7 @@ async fn ide_cases(r: &mut Runner<'_>, fx: &Fixture) {
 
     if let Ok(pid) = std::fs::read_to_string(r.out.join("outside_probe_pid")) {
         if let Ok(pid) = pid.trim().parse::<i32>() {
+            // SAFETY: kill has no memory-safety preconditions; a stale pid only yields ESRCH.
             unsafe { libc::kill(pid, libc::SIGTERM) };
         }
     }

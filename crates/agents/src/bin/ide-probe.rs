@@ -25,7 +25,7 @@ fn main() {
         req.headers_mut()
             .insert("X-Claude-Code-Ide-Authorization", token.parse().expect("token"));
         req.headers_mut()
-            .insert("Sec-WebSocket-Protocol", "mcp".parse().unwrap());
+            .insert("Sec-WebSocket-Protocol", "mcp".parse().expect("static header value"));
     }
     let (mut ws, _) = match tungstenite::connect(req) {
         Ok(c) => c,

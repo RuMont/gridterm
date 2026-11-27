@@ -1602,9 +1602,8 @@ fn layout_grid(
             && start + text.chars().count() == col);
         if !continues {
             flush(&mut batch, &mut plan);
-            batch = Some((line, col, style, String::new()));
         }
-        let text = &mut batch.as_mut().unwrap().3;
+        let (_, _, _, text) = batch.get_or_insert_with(|| (line, col, style, String::new()));
         text.push(if cell.c == '\0' { ' ' } else { cell.c });
         if width == 2 {
             // Wide glyphs get their own batch so the grid stays aligned.

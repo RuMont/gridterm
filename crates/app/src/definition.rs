@@ -14,8 +14,9 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock};
 
+use parking_lot::Mutex;
 use regex::Regex;
 
 /// Where a symbol is declared: file and 0-based line.
@@ -158,17 +159,21 @@ struct TsImport {
     name: String,
 }
 
-static TS_IMPORT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"(?s)\bimport\s+(?:type\s+)?([\w$*{}\s,]+?)\s+from\s*['"]([^'"]+)['"]"#).unwrap()
+static TS_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)\bimport\s+(?:type\s+)?([\w$*{}\s,]+?)\s+from\s*['"]([^'"]+)['"]"#)
+        .expect("static regex is valid")
 });
-static TS_REQUIRE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"(?s)\b(?:const|let|var)\s+(\{[^}]*\}|[\w$]+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap()
+static TS_REQUIRE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)\b(?:const|let|var)\s+(\{[^}]*\}|[\w$]+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)"#)
+        .expect("static regex is valid")
 });
-static TS_REEXPORT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"(?s)\bexport\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s*['"]([^'"]+)['"])?"#).unwrap()
+static TS_REEXPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)\bexport\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s*['"]([^'"]+)['"])?"#)
+        .expect("static regex is valid")
 });
-static TS_EXPORT_STAR: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r#"\bexport\s+(?:type\s+)?\*\s+(?:as\s+([\w$]+)\s+)?from\s*['"]([^'"]+)['"]"#).unwrap()
+static TS_EXPORT_STAR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\bexport\s+(?:type\s+)?\*\s+(?:as\s+([\w$]+)\s+)?from\s*['"]([^'"]+)['"]"#)
+        .expect("static regex is valid")
 });
 
 /// `a, b as c, type d` → [(exported, local)].
@@ -293,8 +298,9 @@ fn ts_export(path: &Path, name: &str, depth: usize) -> Option<Target> {
         })
     };
     if name == "default" {
-        let re = Regex::new(r"(?m)^[ \t]*export[ \t]+default\b").unwrap();
-        if let Some(m) = re.find(&text) {
+        static EXPORT_DEFAULT: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?m)^[ \t]*export[ \t]+default\b").expect("static regex is valid"));
+        if let Some(m) = EXPORT_DEFAULT.find(&text) {
             return here(line_of(&text, m.start()));
         }
         // `export { x as default }` falls through to the re-exports below.
@@ -305,7 +311,7 @@ fn ts_export(path: &Path, name: &str, depth: usize) -> Option<Target> {
         let Some((original, _)) = ts_specifiers(&c[1]).into_iter().find(|(_, exported)| exported == name) else {
             continue;
         };
-        let line = line_of(&text, c.get(0).unwrap().start());
+        let line = line_of(&text, c.get_match().start());
         match c.get(2) {
             // `export { a as name } from 'm'`
             Some(module) => {
@@ -438,7 +444,9 @@ fn jsonc(text: &str) -> String {
             _ => out.push(c),
         }
     }
-    Regex::new(r",(\s*[}\]])").unwrap().replace_all(&out, "$1").into_owned()
+    static TRAILING_COMMA: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r",(\s*[}\]])").expect("static regex is valid"));
+    TRAILING_COMMA.replace_all(&out, "$1").into_owned()
 }
 
 /// `compilerOptions` of a tsconfig, merged over the ones it `extends`.
@@ -549,8 +557,9 @@ fn node_module(dir: &Path, spec: &str) -> Option<PathBuf> {
 
 // ---- Rust -----------------------------------------------------------------------------
 
-static RUST_USE: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?use[ \t]+([^;]+);").unwrap());
+static RUST_USE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?use[ \t]+([^;]+);").expect("static regex is valid")
+});
 
 #[derive(Default, Debug)]
 struct RustUses {
@@ -704,7 +713,9 @@ fn parent_module(file: &Path) -> Option<PathBuf> {
 fn workspace_crate(file: &Path, name: &str) -> Option<PathBuf> {
     let root = project_root(file);
     let wanted = name.replace('-', "_");
-    let name_re = Regex::new(r#"(?m)^\s*name\s*=\s*"([^"]+)""#).unwrap();
+    static CRATE_NAME: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?m)^\s*name\s*=\s*"([^"]+)""#).expect("static regex is valid"));
+    let name_re = &*CRATE_NAME;
     let mut dirs = vec![root.clone()];
     for depth in 0..2 {
         let mut next = Vec::new();
@@ -799,7 +810,7 @@ fn text_declares_mod(text: &str, name: &str) -> bool {
         r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+{}[ \t]*;",
         regex::escape(name)
     ))
-    .unwrap()
+    .expect("an escaped name yields a valid regex")
     .is_match(text)
 }
 
@@ -904,14 +915,14 @@ fn find_in_project(file: &Path, sym: &str, lang: Lang) -> Option<Target> {
     let hits: Arc<Mutex<Vec<Target>>> = Arc::default();
     let sink = hits.clone();
     fs_tools::content::search(&root, &query, Arc::new(AtomicBool::new(false)), move |m| {
-        let mut hits = sink.lock().unwrap();
+        let mut hits = sink.lock();
         hits.extend(m.lines.iter().map(|l| Target {
             path: m.path.clone(),
             line: l.line_number.saturating_sub(1) as u32,
         }));
     })
     .ok()?;
-    let mut hits = std::mem::take(&mut *hits.lock().unwrap());
+    let mut hits = std::mem::take(&mut *hits.lock());
     // Same language first, then the file closest to the one being read.
     let shared = |p: &Path| {
         p.components()

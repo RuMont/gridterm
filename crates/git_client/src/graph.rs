@@ -86,8 +86,8 @@ pub fn layout(commits: &[CommitInfo]) -> Graph {
                 .filter(|(_, l)| l.is_some_and(|(w, _)| w == id))
                 .map(|(i, _)| i),
         );
-        let (lane, color) = match waiting.first() {
-            Some(&i) => (i, lanes[i].unwrap().1),
+        let (lane, color) = match waiting.first().and_then(|&i| lanes[i].map(|(_, c)| (i, c))) {
+            Some(found) => found,
             None => {
                 let i = free_slot(&mut lanes);
                 (i, new_color())
@@ -111,11 +111,15 @@ pub fn layout(commits: &[CommitInfo]) -> Graph {
         // lane already waits for it.
         from_node.clear();
         for (p, &parent) in parent_ids.iter().enumerate() {
-            match lanes.iter().position(|l| l.is_some_and(|(w, _)| w == parent)) {
-                Some(i) => from_node.push(Seg {
+            let waiting_lane = lanes
+                .iter()
+                .enumerate()
+                .find_map(|(i, l)| l.filter(|&(w, _)| w == parent).map(|(_, c)| (i, c)));
+            match waiting_lane {
+                Some((i, color)) => from_node.push(Seg {
                     from: lane,
                     to: i,
-                    color: lanes[i].unwrap().1,
+                    color,
                 }),
                 None => {
                     let (i, c) = if p == 0 && lanes[lane].is_none() {

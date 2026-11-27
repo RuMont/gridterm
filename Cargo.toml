@@ -39,8 +39,8 @@ fs_tools = { path = "crates/fs_tools" }
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
-undocumented_unsafe_blocks = "warn"
-unwrap_used = "warn"
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
 
 [profile.dev]
 opt-level = 1

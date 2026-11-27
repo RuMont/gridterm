@@ -5,12 +5,13 @@ use std::io::{self, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crossbeam_channel as mpsc;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use parking_lot::Mutex;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::{HeaderValue, StatusCode};
 use tungstenite::Message;
@@ -110,14 +111,14 @@ impl IdeServer {
 
     /// Queues `n` for connection `conn`; false if it is gone.
     pub fn send(&self, conn: ConnId, n: &Notification) -> bool {
-        let conns = self.shared.conns.lock().unwrap();
+        let conns = self.shared.conns.lock();
         conns.get(&conn).is_some_and(|tx| tx.send(n.to_json()).is_ok())
     }
 
     /// Rewrites the lock file when the folders change (Claude Code also
     /// matches IDEs by `workspaceFolders` containing its cwd).
     pub fn set_workspace_folders(&self, folders: Vec<String>) -> io::Result<()> {
-        let mut current = self.folders.lock().unwrap();
+        let mut current = self.folders.lock();
         if *current == folders {
             return Ok(());
         }
@@ -129,7 +130,7 @@ impl IdeServer {
     fn write_lock(&self) -> io::Result<()> {
         let json = serde_json::json!({
             "pid": std::process::id(),
-            "workspaceFolders": *self.folders.lock().unwrap(),
+            "workspaceFolders": *self.folders.lock(),
             "ideName": IDE_NAME,
             "transport": "ws",
             "runningInWindows": false,
@@ -142,7 +143,7 @@ impl IdeServer {
 impl Drop for IdeServer {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
-        self.shared.conns.lock().unwrap().clear();
+        self.shared.conns.lock().clear();
         let _ = std::fs::remove_file(&self.lock_path);
     }
 }
@@ -244,12 +245,12 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
         return;
     }
     let id = shared.next_conn.fetch_add(1, Ordering::Relaxed);
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::unbounded::<String>();
     let mut identified = false;
     let mut pending = Some(tx);
     if anonymous.load(Ordering::Relaxed) {
         if let Some(tx) = pending.take() {
-            shared.conns.lock().unwrap().insert(id, tx);
+            shared.conns.lock().insert(id, tx);
             identified = true;
         }
         let _ = shared
@@ -262,7 +263,7 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             let _ = ws.flush();
             break;
         }
-        if identified && !shared.conns.lock().unwrap().contains_key(&id) {
+        if identified && !shared.conns.lock().contains_key(&id) {
             break; // server stopped or connection dropped by the app
         }
         while let Ok(out) = rx.try_recv() {
@@ -279,7 +280,7 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
                 }
                 Incoming::IdeConnected(pid) => {
                     if let Some(tx) = pending.take() {
-                        shared.conns.lock().unwrap().insert(id, tx);
+                        shared.conns.lock().insert(id, tx);
                         identified = true;
                     }
                     let _ = shared.events.unbounded_send(IdeEvent::Connected { conn: id, pid });
@@ -298,7 +299,7 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             Err(_) => break,
         }
     }
-    shared.conns.lock().unwrap().remove(&id);
+    shared.conns.lock().remove(&id);
     if identified {
         let _ = shared.events.unbounded_send(IdeEvent::Disconnected(id));
     }

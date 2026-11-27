@@ -13,6 +13,7 @@ anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
 futures.workspace = true
+parking_lot.workspace = true
 config.workspace = true
 layout.workspace = true
 terminal.workspace = true

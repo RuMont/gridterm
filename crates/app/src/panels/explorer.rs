@@ -442,15 +442,17 @@ impl ExplorerPanel {
             cancel.store(true, Ordering::Relaxed);
         }
         let pattern = self.query.read(cx).value().to_string();
-        if pattern.trim().is_empty() || self.root.is_none() {
-            self.search = ContentSearch::default();
-            self.search_rows.clear();
-            self.search_task = None;
-            self.search_key = None;
-            cx.notify();
-            return;
-        }
-        let root = self.root.clone().unwrap();
+        let root = match self.root.clone() {
+            Some(root) if !pattern.trim().is_empty() => root,
+            _ => {
+                self.search = ContentSearch::default();
+                self.search_rows.clear();
+                self.search_task = None;
+                self.search_key = None;
+                cx.notify();
+                return;
+            }
+        };
         let scope = self.scope().unwrap_or_else(|| root.clone());
         self.search_scope = Some(scope.clone());
         let query = ContentQuery {
