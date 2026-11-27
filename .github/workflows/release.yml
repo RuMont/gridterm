@@ -1,7 +1,8 @@
 name: Release
 
 # Pushing a tag vX.Y.Z (equal to the version in Cargo.toml) runs the CI and
-# publishes a GitHub release with gridterm.app zipped.
+# publishes a GitHub release with gridterm.app zipped. The notes are the commits
+# since the previous tag (scripts/release-notes.sh) plus .github/release-notes.md.
 
 on:
   push:
@@ -31,6 +32,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the release notes need the history and the previous tag
+      - name: Release notes
+        run: scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build and package
@@ -46,5 +51,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$ZIP" \
             --verify-tag \
             --title "gridterm ${GITHUB_REF_NAME#v}" \
-            --notes-file .github/release-notes.md \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/notes.md"
