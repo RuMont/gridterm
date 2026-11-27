@@ -54,13 +54,24 @@ fn main() {
         }]);
 
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1440.), px(900.)), cx))),
-            titlebar: Some(TitlebarOptions { title: Some("gridterm".into()), ..Default::default() }),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                None,
+                size(px(1440.), px(900.)),
+                cx,
+            ))),
+            titlebar: Some(TitlebarOptions {
+                title: Some("gridterm".into()),
+                ..Default::default()
+            }),
             window_min_size: Some(size(px(640.), px(400.))),
             // e2e runs: always on top, so other windows never cover it
             // (macOS stops drawing a covered window and the checks stall).
             #[cfg(feature = "e2e")]
-            kind: if std::env::var_os("GRIDTERM_E2E").is_some() { WindowKind::PopUp } else { WindowKind::Normal },
+            kind: if std::env::var_os("GRIDTERM_E2E").is_some() {
+                WindowKind::PopUp
+            } else {
+                WindowKind::Normal
+            },
             ..Default::default()
         };
         let (window, ws) = gpui_kit::open_window(options, cx, |window, cx| {

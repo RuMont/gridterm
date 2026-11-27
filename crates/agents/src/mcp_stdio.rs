@@ -56,24 +56,33 @@ pub fn handle(line: &str, socket: Option<&std::path::Path>) -> Option<String> {
     let method = msg.get("method").and_then(Value::as_str)?;
     Some(match method {
         "initialize" => {
-            let version = msg.pointer("/params/protocolVersion").and_then(Value::as_str).unwrap_or("2025-06-18");
-            result(id, json!({
-                "protocolVersion": version,
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "gridterm", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Read-only context of the gridterm cell (terminal) this agent runs in: the file \
-                                 the user is viewing there and their selection.",
-            }))
+            let version = msg
+                .pointer("/params/protocolVersion")
+                .and_then(Value::as_str)
+                .unwrap_or("2025-06-18");
+            result(
+                id,
+                json!({
+                    "protocolVersion": version,
+                    "capabilities": { "tools": { "listChanged": false } },
+                    "serverInfo": { "name": "gridterm", "version": env!("CARGO_PKG_VERSION") },
+                    "instructions": "Read-only context of the gridterm cell (terminal) this agent runs in: the file \
+                                     the user is viewing there and their selection.",
+                }),
+            )
         }
         "ping" => result(id, json!({})),
-        "tools/list" => result(id, json!({
-            "tools": TOOLS.iter().map(|(name, _, description)| json!({
-                "name": name,
-                "description": description,
-                "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-                "annotations": { "readOnlyHint": true },
-            })).collect::<Vec<_>>(),
-        })),
+        "tools/list" => result(
+            id,
+            json!({
+                "tools": TOOLS.iter().map(|(name, _, description)| json!({
+                    "name": name,
+                    "description": description,
+                    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+                    "annotations": { "readOnlyHint": true },
+                })).collect::<Vec<_>>(),
+            }),
+        ),
         "tools/call" => {
             let name = msg.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
             match TOOLS.iter().find(|(n, ..)| *n == name) {
@@ -86,7 +95,9 @@ pub fn handle(line: &str, socket: Option<&std::path::Path>) -> Option<String> {
 }
 
 fn call(socket: Option<&std::path::Path>, method: &str) -> Value {
-    let Some(socket) = socket else { return tool_error(NOT_IN_CELL) };
+    let Some(socket) = socket else {
+        return tool_error(NOT_IN_CELL);
+    };
     match socket::request(socket, method) {
         Ok(v) => text_content(&serde_json::to_string_pretty(&v).unwrap_or_default()),
         Err(e) => tool_error(&format!("gridterm: {e}")),

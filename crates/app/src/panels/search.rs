@@ -236,7 +236,11 @@ impl SearchPanel {
     pub(crate) fn cd_selected(&mut self, cx: &mut Context<Self>) {
         self.flush_query(cx);
         if let Some(hit) = self.hits.get(self.selected) {
-            let dir = if hit.abs_path.is_dir() { hit.abs_path.clone() } else { hit.abs_path.parent().map(Into::into).unwrap_or_default() };
+            let dir = if hit.abs_path.is_dir() {
+                hit.abs_path.clone()
+            } else {
+                hit.abs_path.parent().map(Into::into).unwrap_or_default()
+            };
             cx.emit(PanelEvent::Cd(dir));
         }
     }
@@ -269,8 +273,17 @@ impl SearchPanel {
         let hit = &self.hits[ix];
         let (name, dir) = split_name(&hit.rel_path);
         // Split char indices between the directory part and the file name.
-        let dir_chars = if dir.is_empty() { 0 } else { dir.chars().count() as u32 + 1 };
-        let name_idx: Vec<u32> = hit.indices.iter().filter(|&&i| i >= dir_chars).map(|i| i - dir_chars).collect();
+        let dir_chars = if dir.is_empty() {
+            0
+        } else {
+            dir.chars().count() as u32 + 1
+        };
+        let name_idx: Vec<u32> = hit
+            .indices
+            .iter()
+            .filter(|&&i| i >= dir_chars)
+            .map(|i| i - dir_chars)
+            .collect();
         let dir_idx: Vec<u32> = hit.indices.iter().copied().filter(|&i| i < dir_chars).collect();
         let selected = ix == self.selected;
         let path = hit.abs_path.clone();
@@ -298,14 +311,25 @@ impl SearchPanel {
                 }
                 cx.notify();
             }))
-            .child(Icon::new(IconName::File).size(px(14.)).text_color(rgb(theme::subtext())))
+            .child(
+                Icon::new(IconName::File)
+                    .size(px(14.))
+                    .text_color(rgb(theme::subtext())),
+            )
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .child(div().overflow_hidden().whitespace_nowrap().line_height(px(16.)).text_color(rgb(theme::text())).child(highlighted_text(name, &name_idx, theme::text(), theme::accent())))
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .line_height(px(16.))
+                            .text_color(rgb(theme::text()))
+                            .child(highlighted_text(name, &name_idx, theme::text(), theme::accent())),
+                    )
                     .when(!dir.is_empty(), |el| {
                         el.child(
                             div()
@@ -325,30 +349,46 @@ impl SearchPanel {
                     .invisible()
                     .group_hover(group, |s| s.visible())
                     .child(
-                        icon_button(("hit-reveal", ix), IconName::FolderTree, cx.listener(move |_, _: &ClickEvent, _, cx| {
-                            cx.emit(PanelEvent::RevealInExplorer(reveal_path.clone()))
-                        }))
-                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Reveal in explorer  ⌘↩").build(w, cx)),
+                        icon_button(
+                            ("hit-reveal", ix),
+                            IconName::FolderTree,
+                            cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.emit(PanelEvent::RevealInExplorer(reveal_path.clone()))
+                            }),
+                        )
+                        .tooltip(|w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new("Reveal in explorer  ⌘↩").build(w, cx)
+                        }),
                     )
                     .child({
                         let ix2 = ix;
-                        icon_button(("hit-cd", ix), IconName::CornerDownRight, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.selected = ix2;
-                            this.cd_selected(cx)
-                        }))
+                        icon_button(
+                            ("hit-cd", ix),
+                            IconName::CornerDownRight,
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.selected = ix2;
+                                this.cd_selected(cx)
+                            }),
+                        )
                         .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("cd to folder  ⌥↩").build(w, cx))
                     })
                     .child({
                         let ix2 = ix;
-                        icon_button(("hit-copy", ix), IconName::Copy, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.selected = ix2;
-                            this.copy_selected(cx)
-                        }))
+                        icon_button(
+                            ("hit-copy", ix),
+                            IconName::Copy,
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.selected = ix2;
+                                this.copy_selected(cx)
+                            }),
+                        )
                         .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Copy path  ⌘⇧C").build(w, cx))
                     })
                     .child(
-                        icon_button(("hit-finder", ix), IconName::ExternalLink, move |_, _, _| reveal_in_finder(&finder_path))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Reveal in Finder").build(w, cx)),
+                        icon_button(("hit-finder", ix), IconName::ExternalLink, move |_, _, _| {
+                            reveal_in_finder(&finder_path)
+                        })
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Reveal in Finder").build(w, cx)),
                     ),
             )
             .into_any_element()
@@ -361,7 +401,11 @@ fn open_event(path: PathBuf, reveal: bool) -> PanelEvent {
     if reveal || !path.is_file() {
         PanelEvent::RevealInExplorer(path)
     } else {
-        PanelEvent::OpenFile { path, line: None, preview: false }
+        PanelEvent::OpenFile {
+            path,
+            line: None,
+            preview: false,
+        }
     }
 }
 
@@ -388,7 +432,13 @@ impl Render for SearchPanel {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(div().p_2().child(Input::new(&self.input).cleanable(true).prefix(Icon::new(IconName::Search).size(px(14.)))))
+            .child(
+                div().p_2().child(
+                    Input::new(&self.input)
+                        .cleanable(true)
+                        .prefix(Icon::new(IconName::Search).size(px(14.))),
+                ),
+            )
             .child(
                 div()
                     .flex()

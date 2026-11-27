@@ -60,7 +60,6 @@ impl SettingsPanel {
                 .flex()
                 .items_center()
                 .justify_center()
-                
                 .bg(rgb(theme::surface0()))
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(theme::surface1())))
@@ -78,13 +77,19 @@ impl SettingsPanel {
         )
     }
 
-    fn toggle(&self, id: &'static str, label: &'static str, on: bool, cx: &mut Context<Self>, f: fn(&mut Config)) -> impl IntoElement {
+    fn toggle(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        on: bool,
+        cx: &mut Context<Self>,
+        f: fn(&mut Config),
+    ) -> impl IntoElement {
         row(label).child(
             div()
                 .id(id)
                 .w(px(34.))
                 .h(px(18.))
-                
                 .p(px(2.))
                 .cursor_pointer()
                 .bg(rgb(if on { theme::accent() } else { theme::surface1() }))

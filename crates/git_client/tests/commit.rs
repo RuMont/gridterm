@@ -14,7 +14,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
         .expect("failed to run git");
-    assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
@@ -23,7 +27,11 @@ fn commit_details_diff_against_first_parent() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     git(d, &["init", "-q", "-b", "main"]);
-    for (k, v) in [("user.name", "Ana Pérez"), ("user.email", "ana@example.com"), ("commit.gpgsign", "false")] {
+    for (k, v) in [
+        ("user.name", "Ana Pérez"),
+        ("user.email", "ana@example.com"),
+        ("commit.gpgsign", "false"),
+    ] {
         git(d, &["config", k, v]);
     }
     fs::write(d.join("a.txt"), "one\ntwo\nthree\n").unwrap();
@@ -50,49 +58,104 @@ fn commit_details_diff_against_first_parent() {
     git(d, &["update-ref", "refs/remotes/origin/main", &head]);
     let c = repo.commit_details(&head, 3, 10_000).unwrap();
     assert!(c.on_remote);
-    assert!(repo.commit_details(&root, 3, 10_000).unwrap().on_remote, "an ancestor of a remote branch is on the remote");
+    assert!(
+        repo.commit_details(&root, 3, 10_000).unwrap().on_remote,
+        "an ancestor of a remote branch is on the remote"
+    );
     assert_eq!(c.sha, head);
     assert_eq!(c.message, "second\n\nA body line.\nAnother one.");
-    assert_eq!((c.author_name.as_str(), c.author_email.as_str()), ("Ana Pérez", "ana@example.com"));
+    assert_eq!(
+        (c.author_name.as_str(), c.author_email.as_str()),
+        ("Ana Pérez", "ana@example.com")
+    );
     assert_eq!(c.parents, vec![root.clone()]);
-    assert_eq!(c.web_url.as_deref(), Some(format!("https://github.com/me/proj/commit/{head}").as_str()));
+    assert_eq!(
+        c.web_url.as_deref(),
+        Some(format!("https://github.com/me/proj/commit/{head}").as_str())
+    );
 
-    let by_path = |p: &str| c.files.iter().find(|f| f.diff.path == Path::new(p)).unwrap_or_else(|| panic!("{p} not in {:?}", c.files));
+    let by_path = |p: &str| {
+        c.files
+            .iter()
+            .find(|f| f.diff.path == Path::new(p))
+            .unwrap_or_else(|| panic!("{p} not in {:?}", c.files))
+    };
     let a = by_path("a.txt");
     assert_eq!((a.status, a.added, a.removed), ('M', 1, 1));
-    let kinds: Vec<(LineKind, &str)> = a.diff.hunks[0].lines.iter().map(|l| (l.kind, l.text.as_str())).collect();
-    assert!(kinds.contains(&(LineKind::Removed, "two")) && kinds.contains(&(LineKind::Added, "TWO")), "{kinds:?}");
+    let kinds: Vec<(LineKind, &str)> = a.diff.hunks[0]
+        .lines
+        .iter()
+        .map(|l| (l.kind, l.text.as_str()))
+        .collect();
+    assert!(
+        kinds.contains(&(LineKind::Removed, "two")) && kinds.contains(&(LineKind::Added, "TWO")),
+        "{kinds:?}"
+    );
     assert_eq!(by_path("new.txt").status, 'A');
     let r = by_path("renamed.txt");
     assert_eq!((r.status, r.old_path.as_deref()), ('R', Some(Path::new("old.txt"))));
 
     // Full texts of both sides, for highlighting (renamed: the old path).
     let (old, new) = repo.commit_texts(&head, Path::new("a.txt"), None, 1 << 20).unwrap();
-    assert_eq!((old.as_deref(), new.as_deref()), (Some("one\ntwo\nthree\n"), Some("one\nTWO\nthree\n")));
-    let (old, new) = repo.commit_texts(&head, Path::new("renamed.txt"), Some(Path::new("old.txt")), 1 << 20).unwrap();
+    assert_eq!(
+        (old.as_deref(), new.as_deref()),
+        (Some("one\ntwo\nthree\n"), Some("one\nTWO\nthree\n"))
+    );
+    let (old, new) = repo
+        .commit_texts(&head, Path::new("renamed.txt"), Some(Path::new("old.txt")), 1 << 20)
+        .unwrap();
     assert!(old.is_some() && old == new, "rename sides {old:?} {new:?}");
-    assert_eq!(repo.commit_texts(&head, Path::new("new.txt"), None, 1 << 20).unwrap().0, None, "an added file has no old side");
-    assert_eq!(repo.commit_texts(&head, Path::new("a.txt"), None, 4).unwrap(), (None, None), "over the byte limit");
+    assert_eq!(
+        repo.commit_texts(&head, Path::new("new.txt"), None, 1 << 20).unwrap().0,
+        None,
+        "an added file has no old side"
+    );
+    assert_eq!(
+        repo.commit_texts(&head, Path::new("a.txt"), None, 4).unwrap(),
+        (None, None),
+        "over the byte limit"
+    );
     // Working tree and index sides.
     fs::write(d.join("a.txt"), "one\nTWO\nthree\nfour\n").unwrap();
-    let (old, new) = repo.diff_texts(Path::new("a.txt"), git_client::DiffSide::Unstaged, 1 << 20).unwrap();
-    assert_eq!((old.as_deref(), new.as_deref()), (Some("one\nTWO\nthree\n"), Some("one\nTWO\nthree\nfour\n")));
+    let (old, new) = repo
+        .diff_texts(Path::new("a.txt"), git_client::DiffSide::Unstaged, 1 << 20)
+        .unwrap();
+    assert_eq!(
+        (old.as_deref(), new.as_deref()),
+        (Some("one\nTWO\nthree\n"), Some("one\nTWO\nthree\nfour\n"))
+    );
     git(d, &["add", "a.txt"]);
-    let (old, new) = repo.diff_texts(Path::new("a.txt"), git_client::DiffSide::Staged, 1 << 20).unwrap();
-    assert_eq!((old.as_deref(), new.as_deref()), (Some("one\nTWO\nthree\n"), Some("one\nTWO\nthree\nfour\n")));
+    let (old, new) = repo
+        .diff_texts(Path::new("a.txt"), git_client::DiffSide::Staged, 1 << 20)
+        .unwrap();
+    assert_eq!(
+        (old.as_deref(), new.as_deref()),
+        (Some("one\nTWO\nthree\n"), Some("one\nTWO\nthree\nfour\n"))
+    );
     git(d, &["reset", "-q", "a.txt"]);
     fs::write(d.join("a.txt"), "one\nTWO\nthree\n").unwrap();
 
     // A root commit diffs against the empty tree; a local remote has no page.
     git(d, &["remote", "set-url", "origin", "/tmp/elsewhere.git"]);
     let first = repo.commit_details(&root, 3, 10_000).unwrap();
-    assert!(first.parents.is_empty() && first.files.iter().all(|f| f.status == 'A'), "{:?}", first.files);
+    assert!(
+        first.parents.is_empty() && first.files.iter().all(|f| f.status == 'A'),
+        "{:?}",
+        first.files
+    );
     assert_eq!(first.web_url, None);
 
     // The line cap is shared by all files.
     let capped = repo.commit_details(&head, 3, 2).unwrap();
     assert!(capped.truncated);
-    assert!(capped.files.iter().map(|f| f.diff.hunks.iter().map(|h| h.lines.len()).sum::<usize>()).sum::<usize>() <= 2);
+    assert!(
+        capped
+            .files
+            .iter()
+            .map(|f| f.diff.hunks.iter().map(|h| h.lines.len()).sum::<usize>())
+            .sum::<usize>()
+            <= 2
+    );
 }
 
 #[test]
@@ -101,7 +164,11 @@ fn line_changes_against_head() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     git(d, &["init", "-q", "-b", "main"]);
-    for (k, v) in [("user.name", "T"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
+    for (k, v) in [
+        ("user.name", "T"),
+        ("user.email", "t@example.com"),
+        ("commit.gpgsign", "false"),
+    ] {
         git(d, &["config", k, v]);
     }
     fs::write(d.join("f.txt"), "1\n2\n3\n4\n5\n6\n").unwrap();
@@ -119,12 +186,22 @@ fn line_changes_against_head() {
     );
     // Staged or not, it is the same against HEAD; committed, nothing.
     git(d, &["add", "f.txt"]);
-    assert_eq!(repo.line_changes(&d.join("f.txt")).unwrap().len(), 3, "absolute path, staged");
+    assert_eq!(
+        repo.line_changes(&d.join("f.txt")).unwrap().len(),
+        3,
+        "absolute path, staged"
+    );
     git(d, &["commit", "-q", "-m", "more"]);
     assert_eq!(repo.line_changes(Path::new("f.txt")).unwrap(), vec![]);
     // Removed at the top, and an untracked file is all added.
     fs::write(d.join("f.txt"), "TWO\n3\nnew\n4\n6\n").unwrap();
-    assert_eq!(repo.line_changes(Path::new("f.txt")).unwrap(), vec![change(Deleted, 1, 0)]);
+    assert_eq!(
+        repo.line_changes(Path::new("f.txt")).unwrap(),
+        vec![change(Deleted, 1, 0)]
+    );
     fs::write(d.join("u.txt"), "a\nb\n").unwrap();
-    assert_eq!(repo.line_changes(Path::new("u.txt")).unwrap(), vec![change(Added, 1, 2)]);
+    assert_eq!(
+        repo.line_changes(Path::new("u.txt")).unwrap(),
+        vec![change(Added, 1, 2)]
+    );
 }

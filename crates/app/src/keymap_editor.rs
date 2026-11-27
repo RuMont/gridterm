@@ -43,7 +43,13 @@ impl KeymapEditor {
             let keystroke = event.keystroke.clone();
             let _ = this.update(cx, |editor, cx| editor.on_keystroke(&keystroke, cx));
         });
-        Self { keymap, recording: None, note: None, focus: cx.focus_handle(), _intercept: intercept }
+        Self {
+            keymap,
+            recording: None,
+            note: None,
+            focus: cx.focus_handle(),
+            _intercept: intercept,
+        }
     }
 
     #[cfg(feature = "e2e")]
@@ -77,7 +83,10 @@ impl KeymapEditor {
         let os = cx.platform_info().os;
         let key = keystroke.unparse(os);
         if !accepted(keystroke) {
-            self.note = Some((format!("{} needs ⌘, ⌃ or ⌥ (or use an F key)", actions::display_key(&key, os)).into(), true));
+            self.note = Some((
+                format!("{} needs ⌘, ⌃ or ⌥ (or use an F key)", actions::display_key(&key, os)).into(),
+                true,
+            ));
             cx.notify();
             return;
         }
@@ -116,7 +125,14 @@ impl KeymapEditor {
         let custom = self.keymap.bindings.contains_key(cmd.id);
         let recording = self.recording == Some(cmd.id);
         let chip = |text: String| {
-            div().px_1p5().py(px(1.)).bg(rgb(theme::surface0())).border_1().border_color(rgb(theme::surface1())).text_color(rgb(theme::text())).child(text)
+            div()
+                .px_1p5()
+                .py(px(1.))
+                .bg(rgb(theme::surface0()))
+                .border_1()
+                .border_color(rgb(theme::surface1()))
+                .text_color(rgb(theme::text()))
+                .child(text)
         };
         let shortcut = div()
             .id(SharedString::from(format!("kbd-{}", cmd.id)))
@@ -135,7 +151,11 @@ impl KeymapEditor {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.start_recording(cmd.id, cx)))
             .map(|el| {
                 if recording {
-                    el.child(div().text_color(rgb(theme::accent())).child("Press a shortcut… (Esc cancels)"))
+                    el.child(
+                        div()
+                            .text_color(rgb(theme::accent()))
+                            .child("Press a shortcut… (Esc cancels)"),
+                    )
                 } else if keys.is_empty() {
                     el.child(div().text_color(rgb(theme::overlay0())).child("—"))
                 } else {
@@ -159,8 +179,18 @@ impl KeymapEditor {
                     .gap_1()
                     .flex_1()
                     .min_w_0()
-                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(rgb(theme::text())).child(cmd.label))
-                    .when(custom, |el| el.child(div().flex_none().text_color(rgb(theme::accent())).child("•"))),
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(rgb(theme::text()))
+                            .child(cmd.label),
+                    )
+                    .when(custom, |el| {
+                        el.child(div().flex_none().text_color(rgb(theme::accent())).child("•"))
+                    }),
             )
             .child(shortcut)
             .child(
@@ -172,14 +202,26 @@ impl KeymapEditor {
                     .justify_end()
                     .when(custom, |el| {
                         el.child(
-                            crate::ui::icon_button(SharedString::from(format!("kbd-reset-{}", cmd.id)), IconName::Undo2, cx.listener(move |this, _, _, cx| this.reset(cmd.id, cx)))
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Back to the default").build(w, cx)),
+                            crate::ui::icon_button(
+                                SharedString::from(format!("kbd-reset-{}", cmd.id)),
+                                IconName::Undo2,
+                                cx.listener(move |this, _, _, cx| this.reset(cmd.id, cx)),
+                            )
+                            .tooltip(|w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Back to the default").build(w, cx)
+                            }),
                         )
                     })
                     .when(!keys.is_empty(), |el| {
                         el.child(
-                            crate::ui::icon_button(SharedString::from(format!("kbd-clear-{}", cmd.id)), IconName::Close, cx.listener(move |this, _, _, cx| this.clear(cmd.id, cx)))
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Remove the shortcut").build(w, cx)),
+                            crate::ui::icon_button(
+                                SharedString::from(format!("kbd-clear-{}", cmd.id)),
+                                IconName::Close,
+                                cx.listener(move |this, _, _, cx| this.clear(cmd.id, cx)),
+                            )
+                            .tooltip(|w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Remove the shortcut").build(w, cx)
+                            }),
                         )
                     }),
             )
@@ -221,14 +263,27 @@ fn assign(keymap: &mut Keymap, id: &str, key: &str, os: OperatingSystem) -> Opti
     } else {
         keymap.bindings.insert(id.to_string(), vec![key.to_string()]);
     }
-    (!taken_from.is_empty()).then(|| format!("{} no longer runs {}", actions::display_key(key, os), taken_from.join(", ")))
+    (!taken_from.is_empty()).then(|| {
+        format!(
+            "{} no longer runs {}",
+            actions::display_key(key, os),
+            taken_from.join(", ")
+        )
+    })
 }
 
 impl Render for KeymapEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let os = cx.platform_info().os;
         let path = Keymap::path().map(|p| terminal::display_path(&p)).unwrap_or_default();
-        let mut list = div().id("kbd-list").flex().flex_col().flex_1().min_h_0().overflow_y_scroll().py_1();
+        let mut list = div()
+            .id("kbd-list")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .py_1();
         let mut group = "";
         for cmd in COMMANDS {
             if cmd.group != group {
@@ -246,7 +301,10 @@ impl Render for KeymapEditor {
             .items_center()
             .justify_center()
             .bg(rgba(theme::backdrop()))
-            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.emit(KeymapEditorEvent::Close)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.emit(KeymapEditorEvent::Close)),
+            )
             .child(
                 div()
                     .id("keymap-window")
@@ -274,11 +332,28 @@ impl Render for KeymapEditor {
                             .py_2()
                             .border_b_1()
                             .border_color(rgb(theme::surface0()))
-                            .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgb(theme::text())).child("Keyboard shortcuts"))
-                            .child(crate::ui::text_button("kbd-reset-all", "Reset all", false, !self.keymap.bindings.is_empty(), cx.listener(|this, _, _, cx| this.reset_all(cx))))
                             .child(
-                                crate::ui::icon_button("kbd-close", IconName::Close, cx.listener(|_, _, _, cx| cx.emit(KeymapEditorEvent::Close)))
-                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Close  Esc").build(w, cx)),
+                                div()
+                                    .flex_1()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(theme::text()))
+                                    .child("Keyboard shortcuts"),
+                            )
+                            .child(crate::ui::text_button(
+                                "kbd-reset-all",
+                                "Reset all",
+                                false,
+                                !self.keymap.bindings.is_empty(),
+                                cx.listener(|this, _, _, cx| this.reset_all(cx)),
+                            ))
+                            .child(
+                                crate::ui::icon_button(
+                                    "kbd-close",
+                                    IconName::Close,
+                                    cx.listener(|_, _, _, cx| cx.emit(KeymapEditorEvent::Close)),
+                                )
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Close  Esc").build(w, cx)),
                             ),
                     )
                     .child(
@@ -289,8 +364,12 @@ impl Render for KeymapEditor {
                             .border_b_1()
                             .border_color(rgb(theme::surface0()))
                             .map(|el| match &self.note {
-                                Some((note, error)) => el.text_color(rgb(if *error { theme::red() } else { theme::peach() })).child(note.clone()),
-                                None => el.text_color(rgb(theme::overlay0())).child("Click a shortcut, then press the new combination."),
+                                Some((note, error)) => el
+                                    .text_color(rgb(if *error { theme::red() } else { theme::peach() }))
+                                    .child(note.clone()),
+                                None => el
+                                    .text_color(rgb(theme::overlay0()))
+                                    .child("Click a shortcut, then press the new combination."),
                             }),
                     )
                     .child(list)

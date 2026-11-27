@@ -25,12 +25,18 @@ pub type ConnId = u64;
 pub enum IdeEvent {
     /// An authenticated client (it read the lock file's token) identified
     /// itself (`ide_connected`); `pid` is its process.
-    Connected { conn: ConnId, pid: Option<i32> },
+    Connected {
+        conn: ConnId,
+        pid: Option<i32>,
+    },
     /// A client connected without a token (e.g. opencode, which finds the
     /// port through `CLAUDE_CODE_SSE_PORT` and never identifies itself). The
     /// app must find its process from `peer_port` (the client's local port)
     /// before sending it anything.
-    Anonymous { conn: ConnId, peer_port: u16 },
+    Anonymous {
+        conn: ConnId,
+        peer_port: u16,
+    },
     Disconnected(ConnId),
 }
 
@@ -79,7 +85,9 @@ impl IdeServer {
             events: Some(rx),
         };
         server.write_lock()?;
-        thread::Builder::new().name("ide-accept".into()).spawn(move || accept_loop(listener, shared))?;
+        thread::Builder::new()
+            .name("ide-accept".into())
+            .spawn(move || accept_loop(listener, shared))?;
         Ok(server)
     }
 
@@ -147,7 +155,12 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
     let tmp = path.with_extension("lock.tmp");
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
     f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     f.write_all(bytes)?;
     f.sync_all()?;
@@ -165,7 +178,9 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
         match listener.accept() {
             Ok((stream, _)) => {
                 let shared = shared.clone();
-                let _ = thread::Builder::new().name("ide-conn".into()).spawn(move || serve(stream, shared));
+                let _ = thread::Builder::new()
+                    .name("ide-conn".into())
+                    .spawn(move || serve(stream, shared));
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
             Err(e) => {
@@ -217,11 +232,14 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             None => anon.store(true, Ordering::Relaxed),
         }
         if mcp {
-            resp.headers_mut().insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mcp"));
+            resp.headers_mut()
+                .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("mcp"));
         }
         Ok(resp)
     };
-    let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else { return };
+    let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else {
+        return;
+    };
     if ws.get_ref().set_read_timeout(Some(POLL)).is_err() {
         return;
     }
@@ -234,7 +252,9 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             shared.conns.lock().unwrap().insert(id, tx);
             identified = true;
         }
-        let _ = shared.events.unbounded_send(IdeEvent::Anonymous { conn: id, peer_port });
+        let _ = shared
+            .events
+            .unbounded_send(IdeEvent::Anonymous { conn: id, peer_port });
     }
     loop {
         if shared.stop.load(Ordering::Acquire) {
@@ -270,7 +290,9 @@ fn serve(stream: TcpStream, shared: Arc<Shared>) {
             Ok(_) => {
                 let _ = ws.flush(); // answers pings
             }
-            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+            Err(tungstenite::Error::Io(e))
+                if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+            {
                 let _ = ws.flush();
             }
             Err(_) => break,

@@ -8,8 +8,8 @@ mod cli;
 mod commit;
 mod diff;
 mod error;
-mod marks;
 pub mod graph;
+mod marks;
 mod repo;
 mod status;
 mod texts;
@@ -35,9 +35,7 @@ pub fn discover_root(path: &Path) -> Option<PathBuf> {
 
 /// Strips trailing separators (libgit2 reports workdirs as `/path/to/repo/`).
 fn normalize(path: &Path) -> PathBuf {
-    path.components()
-        .filter(|c| !matches!(c, Component::CurDir))
-        .collect()
+    path.components().filter(|c| !matches!(c, Component::CurDir)).collect()
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

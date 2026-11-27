@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use git_client::{
-    discover_root, error_kind, friendly_message, ChangeKind, FileChange, GitErrorKind, GitRepo,
-    RepoWatcher, UpstreamPolicy,
+    discover_root, error_kind, friendly_message, ChangeKind, FileChange, GitErrorKind, GitRepo, RepoWatcher,
+    UpstreamPolicy,
 };
 use tempfile::TempDir;
 
@@ -68,14 +68,7 @@ impl Fixture {
         let origin = fixture.tmp.path().join("origin.git");
         git(
             fixture.tmp.path(),
-            &[
-                "init",
-                "-q",
-                "--bare",
-                "-b",
-                "main",
-                origin.to_str().unwrap(),
-            ],
+            &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()],
         );
         fixture.git(&["remote", "add", "origin", origin.to_str().unwrap()]);
         fixture
@@ -115,12 +108,7 @@ impl Fixture {
         let origin = self.tmp.path().join("origin.git");
         git(
             self.tmp.path(),
-            &[
-                "clone",
-                "-q",
-                origin.to_str().unwrap(),
-                dir.to_str().unwrap(),
-            ],
+            &["clone", "-q", origin.to_str().unwrap(), dir.to_str().unwrap()],
         );
         configure(&dir, &self.tmp.path().join("hooks"));
         dir
@@ -143,10 +131,7 @@ fn discover_root_finds_workdir() {
     let fx = Fixture::new();
     fs::create_dir_all(fx.dir().join("a/b")).unwrap();
     let found = discover_root(&fx.dir().join("a/b")).unwrap();
-    assert_eq!(
-        found.canonicalize().unwrap(),
-        fx.dir().canonicalize().unwrap()
-    );
+    assert_eq!(found.canonicalize().unwrap(), fx.dir().canonicalize().unwrap());
 
     let outside = TempDir::new().unwrap();
     assert_eq!(discover_root(outside.path()), None);
@@ -155,12 +140,10 @@ fn discover_root_finds_workdir() {
 #[test]
 fn letters() {
     use ChangeKind::*;
-    let letters: String = [
-        Added, Modified, Deleted, Renamed, TypeChange, Untracked, Conflicted,
-    ]
-    .iter()
-    .map(ChangeKind::letter)
-    .collect();
+    let letters: String = [Added, Modified, Deleted, Renamed, TypeChange, Untracked, Conflicted]
+        .iter()
+        .map(ChangeKind::letter)
+        .collect();
     assert_eq!(letters, "AMDRT?U");
 }
 
@@ -196,10 +179,7 @@ fn stage_and_unstage_on_unborn_head() {
     fx.repo.stage(&paths(&["a.txt"])).unwrap();
     let status = fx.repo.status().unwrap();
     assert_eq!(status.staged, vec![change("a.txt", ChangeKind::Added)]);
-    assert_eq!(
-        status.unstaged,
-        vec![change("b.txt", ChangeKind::Untracked)]
-    );
+    assert_eq!(status.unstaged, vec![change("b.txt", ChangeKind::Untracked)]);
 
     fx.repo.unstage(&paths(&["a.txt"])).unwrap();
     let status = fx.repo.status().unwrap();
@@ -210,10 +190,7 @@ fn stage_and_unstage_on_unborn_head() {
     let status = fx.repo.status().unwrap();
     assert_eq!(
         status.staged,
-        vec![
-            change("a.txt", ChangeKind::Added),
-            change("b.txt", ChangeKind::Added)
-        ]
+        vec![change("a.txt", ChangeKind::Added), change("b.txt", ChangeKind::Added)]
     );
     assert!(status.unstaged.is_empty());
 
@@ -228,10 +205,7 @@ fn detects_untracked_modified_deleted_renamed() {
     let fx = Fixture::new();
     fx.write("a.txt", "a\n");
     fx.write("b.txt", "b\n");
-    fx.write(
-        "c.txt",
-        "some content long enough to be detected as a rename\n",
-    );
+    fx.write("c.txt", "some content long enough to be detected as a rename\n");
     fx.git(&["add", "."]);
     fx.git(&["commit", "-q", "-m", "init"]);
 
@@ -256,12 +230,8 @@ fn detects_untracked_modified_deleted_renamed() {
     fx.repo.stage(&paths(&["a.txt"])).unwrap();
     fx.write("a.txt", "a changed again\n");
     let status = fx.repo.status().unwrap();
-    assert!(status
-        .staged
-        .contains(&change("a.txt", ChangeKind::Modified)));
-    assert!(status
-        .unstaged
-        .contains(&change("a.txt", ChangeKind::Modified)));
+    assert!(status.staged.contains(&change("a.txt", ChangeKind::Modified)));
+    assert!(status.unstaged.contains(&change("a.txt", ChangeKind::Modified)));
 }
 
 #[test]
@@ -269,10 +239,7 @@ fn stage_and_unstage_with_head() {
     let fx = Fixture::new();
     fx.write("a.txt", "a\n");
     fx.write("b.txt", "b\n");
-    fx.write(
-        "c.txt",
-        "some content long enough to be detected as a rename\n",
-    );
+    fx.write("c.txt", "some content long enough to be detected as a rename\n");
     fx.git(&["add", "."]);
     fx.git(&["commit", "-q", "-m", "init"]);
 
@@ -284,28 +251,20 @@ fn stage_and_unstage_with_head() {
     // Deleted file.
     fx.repo.stage(&paths(&["b.txt"])).unwrap();
     let status = fx.repo.status().unwrap();
-    assert!(status
-        .staged
-        .contains(&change("b.txt", ChangeKind::Deleted)));
+    assert!(status.staged.contains(&change("b.txt", ChangeKind::Deleted)));
     assert!(!status.unstaged.iter().any(|c| c.path == Path::new("b.txt")));
 
     fx.repo.unstage(&paths(&["b.txt"])).unwrap();
     let status = fx.repo.status().unwrap();
     assert!(!status.staged.iter().any(|c| c.path == Path::new("b.txt")));
-    assert!(status
-        .unstaged
-        .contains(&change("b.txt", ChangeKind::Deleted)));
+    assert!(status.unstaged.contains(&change("b.txt", ChangeKind::Deleted)));
 
     // Unstaging a rename destination also unstages its source.
     fx.repo.unstage(&paths(&["d.txt"])).unwrap();
     let status = fx.repo.status().unwrap();
     assert!(status.staged.is_empty());
-    assert!(status
-        .unstaged
-        .contains(&change("c.txt", ChangeKind::Deleted)));
-    assert!(status
-        .unstaged
-        .contains(&change("d.txt", ChangeKind::Untracked)));
+    assert!(status.unstaged.contains(&change("c.txt", ChangeKind::Deleted)));
+    assert!(status.unstaged.contains(&change("d.txt", ChangeKind::Untracked)));
 
     fx.repo.stage_all().unwrap();
     let status = fx.repo.status().unwrap();
@@ -344,10 +303,7 @@ fn commit_staged_changes() {
     assert_eq!(log[0].sha, fx.head());
     assert!(log[0].sha.starts_with(&log[0].short_sha));
     assert!(!log[0].pushed);
-    assert_eq!(
-        fx.git(&["log", "-1", "--format=%B"]),
-        "First commit\n\nWith a body."
-    );
+    assert_eq!(fx.git(&["log", "-1", "--format=%B"]), "First commit\n\nWith a body.");
 
     let status = fx.repo.status().unwrap();
     assert!(status.staged.is_empty() && status.unstaged.is_empty());
@@ -474,13 +430,7 @@ fn pull_ff_only_fails_on_divergence_and_rebase_succeeds() {
     assert!(fx.repo.pull(false).is_err());
     fx.repo.pull(true).unwrap();
 
-    let summaries: Vec<_> = fx
-        .repo
-        .log(10)
-        .unwrap()
-        .into_iter()
-        .map(|c| c.summary)
-        .collect();
+    let summaries: Vec<_> = fx.repo.log(10).unwrap().into_iter().map(|c| c.summary).collect();
     assert_eq!(summaries, ["local change", "remote change", "first"]);
 }
 
@@ -495,11 +445,7 @@ fn revert_pushed_commit() {
     assert_eq!(fx.read("a.txt"), "1\n");
     let log = fx.repo.log(10).unwrap();
     assert_eq!(log.len(), 3);
-    assert!(
-        log[0].summary.starts_with("Revert \"second\""),
-        "{}",
-        log[0].summary
-    );
+    assert!(log[0].summary.starts_with("Revert \"second\""), "{}", log[0].summary);
     assert!(!log[0].pushed);
     let status = fx.repo.status().unwrap();
     assert!(status.staged.is_empty() && status.unstaged.is_empty());
@@ -513,10 +459,7 @@ fn conflicting_revert_is_aborted() {
     let third = fx.commit_file("a.txt", "3\n", "third");
 
     let err = fx.repo.revert(&second).unwrap_err();
-    assert!(
-        err.to_string().contains("revert has conflicts, aborted"),
-        "{err:#}"
-    );
+    assert!(err.to_string().contains("revert has conflicts, aborted"), "{err:#}");
 
     assert_eq!(fx.head(), third);
     assert_eq!(fx.read("a.txt"), "3\n");
@@ -546,10 +489,7 @@ fn conflicting_pull_rebase_is_aborted() {
 
     let local = fx.commit_file("a.txt", "local\n", "local change");
     let err = fx.repo.pull(true).unwrap_err();
-    assert!(
-        err.to_string().contains("rebase has conflicts, aborted"),
-        "{err:#}"
-    );
+    assert!(err.to_string().contains("rebase has conflicts, aborted"), "{err:#}");
     assert_eq!(fx.head(), local);
     assert!(!fx.dir().join(".git/rebase-merge").exists());
     assert!(!fx.dir().join(".git/rebase-apply").exists());
@@ -575,10 +515,7 @@ fn conflicted_files_are_unstaged() {
 
     let status = fx.repo.status().unwrap();
     assert!(status.staged.is_empty());
-    assert_eq!(
-        status.unstaged,
-        vec![change("a.txt", ChangeKind::Conflicted)]
-    );
+    assert_eq!(status.unstaged, vec![change("a.txt", ChangeKind::Conflicted)]);
 
     fx.write("a.txt", "resolved\n");
     fx.repo.stage(&paths(&["a.txt"])).unwrap();
@@ -617,9 +554,7 @@ fn push_with_streams_progress_for_large_file() {
         )
         .unwrap();
     assert!(
-        lines
-            .iter()
-            .any(|l| l.contains('%') || l.starts_with("To ")),
+        lines.iter().any(|l| l.contains('%') || l.starts_with("To ")),
         "{lines:?}"
     );
     assert!(lines.iter().any(|l| l.contains('%')), "{lines:?}");
@@ -627,10 +562,7 @@ fn push_with_streams_progress_for_large_file() {
     assert!(lines.iter().all(|l| !l.is_empty() && l.trim() == l));
     // The returned summary keeps only the final state of progress lines.
     assert!(!output.contains('\r'), "{output:?}");
-    assert_eq!(
-        fx.repo.status().unwrap().upstream.as_deref(),
-        Some("origin/main")
-    );
+    assert_eq!(fx.repo.status().unwrap().upstream.as_deref(), Some("origin/main"));
 }
 
 #[test]
@@ -645,11 +577,7 @@ fn push_with_require_existing_fails_without_upstream() {
 
     let err = fx
         .repo
-        .push_with(
-            UpstreamPolicy::RequireExisting,
-            &mut |_| {},
-            &AtomicBool::new(false),
-        )
+        .push_with(UpstreamPolicy::RequireExisting, &mut |_| {}, &AtomicBool::new(false))
         .unwrap_err();
     assert_eq!(error_kind(&err), GitErrorKind::NoUpstream);
     assert_eq!(friendly_message(&err), "This branch has no upstream yet.");
@@ -658,21 +586,13 @@ fn push_with_require_existing_fails_without_upstream() {
     assert!(refs.is_empty(), "nothing should be pushed: {refs}");
 
     fx.repo
-        .push_with(
-            UpstreamPolicy::SetIfMissing,
-            &mut |_| {},
-            &AtomicBool::new(false),
-        )
+        .push_with(UpstreamPolicy::SetIfMissing, &mut |_| {}, &AtomicBool::new(false))
         .unwrap();
     assert!(git(&origin, &["for-each-ref"]).contains("refs/heads/feature"));
     // With an upstream, RequireExisting pushes normally.
     fx.commit_file("a.txt", "2\n", "second");
     fx.repo
-        .push_with(
-            UpstreamPolicy::RequireExisting,
-            &mut |_| {},
-            &AtomicBool::new(false),
-        )
+        .push_with(UpstreamPolicy::RequireExisting, &mut |_| {}, &AtomicBool::new(false))
         .unwrap();
     assert_eq!(git(&origin, &["rev-parse", "feature"]), fx.head());
 }
@@ -686,14 +606,7 @@ fn default_push_target_cases() {
     let origin = fx.tmp.path().join("origin.git");
     git(
         fx.tmp.path(),
-        &[
-            "init",
-            "-q",
-            "--bare",
-            "-b",
-            "main",
-            origin.to_str().unwrap(),
-        ],
+        &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()],
     );
     fx.git(&["remote", "add", "upstream", origin.to_str().unwrap()]);
     assert_eq!(
@@ -709,10 +622,7 @@ fn default_push_target_cases() {
 fn push_without_remote_is_no_remote() {
     let fx = Fixture::new();
     fx.commit_file("a.txt", "1\n", "first");
-    for policy in [
-        UpstreamPolicy::SetIfMissing,
-        UpstreamPolicy::RequireExisting,
-    ] {
+    for policy in [UpstreamPolicy::SetIfMissing, UpstreamPolicy::RequireExisting] {
         let err = fx
             .repo
             .push_with(policy, &mut |_| {}, &AtomicBool::new(false))
@@ -765,18 +675,11 @@ fn pull_with_streams_and_conflicts_are_classified() {
     let mut lines = Vec::new();
     let err = fx
         .repo
-        .pull_with(
-            true,
-            &mut |l| lines.push(l.to_owned()),
-            &AtomicBool::new(false),
-        )
+        .pull_with(true, &mut |l| lines.push(l.to_owned()), &AtomicBool::new(false))
         .unwrap_err();
     assert_eq!(error_kind(&err), GitErrorKind::Conflict, "{err:#}");
     let msg = friendly_message(&err);
-    assert!(
-        msg.contains("conflicts") && msg.contains("aborted"),
-        "{msg}"
-    );
+    assert!(msg.contains("conflicts") && msg.contains("aborted"), "{msg}");
     assert!(!lines.is_empty());
     assert_eq!(fx.head(), local);
     assert!(!fx.dir().join(".git/rebase-merge").exists());
@@ -802,16 +705,8 @@ fn cancel_during_push_kills_slow_transport() {
     // A receive-pack that hangs, standing in for a stalled network.
     let script = fx.tmp.path().join("slow-receive-pack");
     fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
-    Command::new("chmod")
-        .arg("+x")
-        .arg(&script)
-        .status()
-        .unwrap();
-    fx.git(&[
-        "config",
-        "remote.origin.receivepack",
-        script.to_str().unwrap(),
-    ]);
+    Command::new("chmod").arg("+x").arg(&script).status().unwrap();
+    fx.git(&["config", "remote.origin.receivepack", script.to_str().unwrap()]);
 
     let cancel = Arc::new(AtomicBool::new(false));
     let setter = {
@@ -827,11 +722,7 @@ fn cancel_during_push_kills_slow_transport() {
         .push_with(UpstreamPolicy::SetIfMissing, &mut |_| {}, &cancel)
         .unwrap_err();
     assert_eq!(error_kind(&err), GitErrorKind::Cancelled, "{err:#}");
-    assert!(
-        start.elapsed() < Duration::from_secs(2),
-        "{:?}",
-        start.elapsed()
-    );
+    assert!(start.elapsed() < Duration::from_secs(2), "{:?}", start.elapsed());
     setter.join().unwrap();
 }
 
@@ -979,7 +870,11 @@ fn log_includes_all_branches_with_refs() {
     fx.git(&["remote", "set-head", "origin", "main"]);
 
     let log = fx.repo.log(50).unwrap();
-    let by = |s: &str| log.iter().find(|c| c.summary == s).unwrap_or_else(|| panic!("{s} missing: {log:?}"));
+    let by = |s: &str| {
+        log.iter()
+            .find(|c| c.summary == s)
+            .unwrap_or_else(|| panic!("{s} missing: {log:?}"))
+    };
     assert_eq!(log.len(), 6, "{:?}", log.iter().map(|c| &c.summary).collect::<Vec<_>>());
     // HEAD's history.
     for s in ["merge feature", "main work", "feature work", "root"] {
@@ -994,15 +889,35 @@ fn log_includes_all_branches_with_refs() {
     // Parents and refs.
     assert_eq!(by("merge feature").parents.len(), 2);
     let names = |s: &str| by(s).refs.iter().map(|r| (r.name.clone(), r.kind)).collect::<Vec<_>>();
-    assert_eq!(names("merge feature"), [("main".into(), RefKind::Head), ("v1".into(), RefKind::Tag)]);
-    assert_eq!(names("topic work"), [("topic".into(), RefKind::Local), ("origin/topic".into(), RefKind::Remote)]);
+    assert_eq!(
+        names("merge feature"),
+        [("main".into(), RefKind::Head), ("v1".into(), RefKind::Tag)]
+    );
+    assert_eq!(
+        names("topic work"),
+        [
+            ("topic".into(), RefKind::Local),
+            ("origin/topic".into(), RefKind::Remote)
+        ]
+    );
     assert_eq!(names("wip work"), [("wip".into(), RefKind::Local)]);
-    assert_eq!(names("root"), [("origin/main".into(), RefKind::Remote)], "origin/HEAD must not show");
+    assert_eq!(
+        names("root"),
+        [("origin/main".into(), RefKind::Remote)],
+        "origin/HEAD must not show"
+    );
     assert_eq!(names("feature work"), [("feature".into(), RefKind::Local)]);
     // Graph: the merge forks into two lanes.
     let g = graph::layout(&log);
     let merge = log.iter().position(|c| c.summary == "merge feature").unwrap();
-    assert_eq!(g.rows[merge].bottom.iter().filter(|s| s.from == g.rows[merge].lane).count(), 2);
+    assert_eq!(
+        g.rows[merge]
+            .bottom
+            .iter()
+            .filter(|s| s.from == g.rows[merge].lane)
+            .count(),
+        2
+    );
     // Commits made within the same second have no fixed order between
     // branches, so the lane count is not asserted here (graph unit tests and
     // e2e Y4, with fixed dates, cover lanes).

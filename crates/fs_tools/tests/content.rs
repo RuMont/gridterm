@@ -80,10 +80,7 @@ fn literal_vs_regex() {
     assert_eq!(files[0].lines.len(), 2);
 
     let (files, _) = run(dir.path(), &q(r"fn \w+\(\)", true, true, 0));
-    assert_eq!(
-        rels(&files),
-        ["src/lib.rs", "src/main.rs", "src/nested/deep/util.rs"]
-    );
+    assert_eq!(rels(&files), ["src/lib.rs", "src/main.rs", "src/nested/deep/util.rs"]);
     let util = &files[2].lines[0];
     assert_eq!(&util.text[util.ranges[0].clone()], "fn util()");
 
@@ -115,11 +112,7 @@ fn utf8_byte_ranges() {
 fn max_results_truncates() {
     let dir = tempfile::tempdir().unwrap();
     for i in 0..20 {
-        common::write(
-            dir.path(),
-            &format!("f{i}.txt"),
-            b"needle\nneedle\nneedle\n",
-        );
+        common::write(dir.path(), &format!("f{i}.txt"), b"needle\nneedle\nneedle\n");
     }
     let (files, summary) = run(dir.path(), &q("needle", false, true, 10));
     assert!(summary.truncated);
@@ -146,20 +139,12 @@ fn cancellation() {
     // Cancelled from the sink after the first file: the search stops early.
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
-    let summary = search(
-        dir.path(),
-        &q("needle", false, true, 0),
-        cancel,
-        move |_| {
-            c.store(true, Ordering::SeqCst);
-        },
-    )
+    let summary = search(dir.path(), &q("needle", false, true, 0), cancel, move |_| {
+        c.store(true, Ordering::SeqCst);
+    })
     .unwrap();
     assert!(summary.cancelled);
-    assert!(
-        summary.files_matched >= 1 && summary.files_matched < 50,
-        "{summary:?}"
-    );
+    assert!(summary.files_matched >= 1 && summary.files_matched < 50, "{summary:?}");
 }
 
 #[test]

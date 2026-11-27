@@ -51,7 +51,15 @@ pub fn parent_pid(pid: i32) -> Option<i32> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     // SAFETY: the buffer is a properly sized, zeroed proc_bsdinfo.
-    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
     (n == size && info.pbi_ppid > 0).then_some(info.pbi_ppid as i32)
 }
 
@@ -117,7 +125,10 @@ mod tests {
     fn own_process_cwd_and_name() {
         let pid = std::process::id() as i32;
         let cwd = process_cwd(pid).expect("cwd");
-        assert_eq!(cwd.canonicalize().unwrap(), std::env::current_dir().unwrap().canonicalize().unwrap());
+        assert_eq!(
+            cwd.canonicalize().unwrap(),
+            std::env::current_dir().unwrap().canonicalize().unwrap()
+        );
         assert!(process_name(pid).is_some());
     }
 

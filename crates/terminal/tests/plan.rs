@@ -9,7 +9,12 @@ use alacritty_terminal::vte::ansi::Processor;
 use futures::StreamExt;
 use terminal::backend::{new_term, GridSize, Pty, SpawnOptions};
 
-const SIZE: GridSize = GridSize { cols: 80, rows: 24, cell_width: 8.0, cell_height: 16.0 };
+const SIZE: GridSize = GridSize {
+    cols: 80,
+    rows: 24,
+    cell_width: 8.0,
+    cell_height: 16.0,
+};
 
 /// T3: `/bin/sh` (no user rc) produces its first output in < 50 ms and the
 /// spawn call itself is short enough to run off the UI thread.
@@ -18,7 +23,12 @@ fn t3_first_output_under_50ms() {
     let mut samples = Vec::new();
     for _ in 0..5 {
         let (term, listener, mut events) = new_term(SIZE, 1000);
-        let opts = SpawnOptions { shell: Some("/bin/sh".into()), cwd: None, scrollback: 1000, extra_env: Vec::new() };
+        let opts = SpawnOptions {
+            shell: Some("/bin/sh".into()),
+            cwd: None,
+            scrollback: 1000,
+            extra_env: Vec::new(),
+        };
         let start = Instant::now();
         let _pty = Pty::spawn(term, listener, &opts, SIZE, 1).expect("spawn");
         let spawn = start.elapsed();

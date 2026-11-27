@@ -96,10 +96,7 @@ fn bench_index(c: &mut Criterion) {
         });
     });
     group.finish();
-    assert_eq!(
-        index.results(0, 1)[0].rel_path,
-        "module_042/sub_3/file_0199.rs"
-    );
+    assert_eq!(index.results(0, 1)[0].rel_path, "module_042/sub_3/file_0199.rs");
 }
 
 fn bench_content(c: &mut Criterion) {
@@ -119,11 +116,10 @@ fn bench_content(c: &mut Criterion) {
         b.iter(|| {
             let files = Arc::new(AtomicUsize::new(0));
             let counter = files.clone();
-            let summary =
-                content::search(&root, &query, Arc::new(AtomicBool::new(false)), move |m| {
-                    counter.fetch_add(m.lines.len(), Ordering::Relaxed);
-                })
-                .unwrap();
+            let summary = content::search(&root, &query, Arc::new(AtomicBool::new(false)), move |m| {
+                counter.fetch_add(m.lines.len(), Ordering::Relaxed);
+            })
+            .unwrap();
             assert_eq!(summary.files_matched, 200);
             files.load(Ordering::Relaxed)
         });

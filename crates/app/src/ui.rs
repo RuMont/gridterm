@@ -20,7 +20,6 @@ pub fn icon_button(
         .flex()
         .items_center()
         .justify_center()
-        
         .cursor_pointer()
         .text_color(rgb(theme::subtext()))
         .hover(|s| s.bg(rgb(theme::surface0())).text_color(rgb(theme::text())))
@@ -51,7 +50,6 @@ pub fn text_button(
         .justify_center()
         .h(px(26.))
         .px_3()
-        
         .text_xs()
         .font_weight(FontWeight::MEDIUM)
         .bg(rgb(bg))
@@ -80,7 +78,6 @@ pub fn section_header(title: impl Into<SharedString>, count: Option<usize>) -> D
             el.child(
                 div()
                     .px_1()
-                    
                     .bg(rgb(theme::surface0()))
                     .text_color(rgb(theme::subtext()))
                     .child(n.to_string()),
@@ -118,7 +115,14 @@ pub fn highlighted_text(text: &str, indices: &[u32], color: u32, highlight: u32)
     }
     let _ = color;
     for range in highlights {
-        runs.push((range, HighlightStyle { color: Some(rgb(highlight).into()), font_weight: Some(FontWeight::BOLD), ..Default::default() }));
+        runs.push((
+            range,
+            HighlightStyle {
+                color: Some(rgb(highlight).into()),
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+        ));
     }
     StyledText::new(text.to_string()).with_highlights(runs)
 }
@@ -129,7 +133,14 @@ pub fn highlighted_ranges(text: &str, ranges: &[std::ops::Range<usize>], highlig
         .iter()
         .filter(|r| r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end))
         .map(|r| {
-            (r.clone(), HighlightStyle { background_color: Some(rgb(highlight_bg).into()), color: Some(rgb(theme::text()).into()), ..Default::default() })
+            (
+                r.clone(),
+                HighlightStyle {
+                    background_color: Some(rgb(highlight_bg).into()),
+                    color: Some(rgb(theme::text()).into()),
+                    ..Default::default()
+                },
+            )
         })
         .collect::<Vec<_>>();
     StyledText::new(text.to_string()).with_highlights(runs)

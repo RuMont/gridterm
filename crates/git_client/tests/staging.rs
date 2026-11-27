@@ -5,10 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
-use git_client::{
-    error_kind, friendly_message, DiffLine, DiffSide, FileDiff, GitErrorKind, GitRepo, Hunk,
-    LineKind,
-};
+use git_client::{error_kind, friendly_message, DiffLine, DiffSide, FileDiff, GitErrorKind, GitRepo, Hunk, LineKind};
 use tempfile::TempDir;
 
 const ALL: usize = usize::MAX;
@@ -108,9 +105,7 @@ fn two_hunks() -> Fixture {
 }
 
 fn two_hunks_worktree() -> String {
-    numbered(1..=20)
-        .replace("l3\n", "L3\n")
-        .replace("l17\n", "l17\nnew\n")
+    numbered(1..=20).replace("l3\n", "L3\n").replace("l17\n", "l17\nnew\n")
 }
 
 fn ctx(old: u32, new: u32, text: &str) -> DiffLine {
@@ -222,12 +217,7 @@ fn diff_file_untracked_deleted_binary() {
     assert_eq!(diff.hunks.len(), 1);
     let hunk = &diff.hunks[0];
     assert_eq!(
-        (
-            hunk.old_start,
-            hunk.old_lines,
-            hunk.new_start,
-            hunk.new_lines
-        ),
+        (hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines),
         (0, 0, 1, 2)
     );
     assert_eq!(hunk.lines, vec![add(1, "a"), add(2, "b")]);
@@ -243,10 +233,7 @@ fn diff_file_untracked_deleted_binary() {
     assert!(diff.binary && diff.hunks.is_empty());
     fx.write("newbin.dat", b"PNG\0\0\xff");
     assert!(fx.diff("newbin.dat", DiffSide::Unstaged).binary);
-    let err = fx
-        .repo
-        .apply_hunk(&diff, 0, DiffSide::Unstaged)
-        .unwrap_err();
+    let err = fx.repo.apply_hunk(&diff, 0, DiffSide::Unstaged).unwrap_err();
     assert!(format!("{err:#}").contains("binary"), "{err:#}");
 
     // Unchanged file: empty diff, not an error.
@@ -258,10 +245,7 @@ fn diff_file_untracked_deleted_binary() {
 #[test]
 fn diff_file_truncates_at_max_lines() {
     let fx = two_hunks();
-    let diff = fx
-        .repo
-        .diff_file(Path::new("f.txt"), DiffSide::Unstaged, 3, 9)
-        .unwrap();
+    let diff = fx.repo.diff_file(Path::new("f.txt"), DiffSide::Unstaged, 3, 9).unwrap();
     assert!(diff.truncated);
     assert_eq!(diff.hunks.len(), 2);
     assert_eq!(diff.hunks[0].lines.len(), 7);
@@ -272,18 +256,12 @@ fn diff_file_truncates_at_max_lines() {
         .diff_file(Path::new("f.txt"), DiffSide::Unstaged, 3, 14)
         .unwrap();
     assert!(!exact.truncated);
-    let at_boundary = fx
-        .repo
-        .diff_file(Path::new("f.txt"), DiffSide::Unstaged, 3, 7)
-        .unwrap();
+    let at_boundary = fx.repo.diff_file(Path::new("f.txt"), DiffSide::Unstaged, 3, 7).unwrap();
     assert!(at_boundary.truncated);
     assert_eq!(at_boundary.hunks.len(), 1);
 
     // The incomplete hunk is refused; the complete one still applies.
-    let err = fx
-        .repo
-        .apply_hunk(&diff, 1, DiffSide::Unstaged)
-        .unwrap_err();
+    let err = fx.repo.apply_hunk(&diff, 1, DiffSide::Unstaged).unwrap_err();
     assert!(format!("{err:#}").contains("truncated"), "{err:#}");
     fx.repo.apply_hunk(&diff, 0, DiffSide::Unstaged).unwrap();
     assert!(fx.index_str("f.txt").contains("L3\n"));
@@ -301,10 +279,7 @@ fn apply_hunk_stages_one_of_two_hunks() {
     assert!(!cached.contains("+new"), "{cached}");
     assert!(unstaged.contains("+new"), "{unstaged}");
     assert!(!unstaged.contains("L3"), "{unstaged}");
-    assert_eq!(
-        fx.index_str("f.txt"),
-        numbered(1..=20).replace("l3\n", "L3\n")
-    );
+    assert_eq!(fx.index_str("f.txt"), numbered(1..=20).replace("l3\n", "L3\n"));
 
     // The second hunk of the same (now outdated) diff still stages.
     fx.repo.apply_hunk(&diff, 1, DiffSide::Unstaged).unwrap();
@@ -324,10 +299,7 @@ fn apply_hunk_with_line_offsets_from_earlier_unstaged_hunk() {
     assert_eq!(diff.hunks.len(), 2);
     // Stage only the second hunk: its new_start (19) differs from old (17).
     fx.repo.apply_hunk(&diff, 1, DiffSide::Unstaged).unwrap();
-    assert_eq!(
-        fx.index_str("f.txt"),
-        numbered(1..=20).replace("l18\n", "L18\n")
-    );
+    assert_eq!(fx.index_str("f.txt"), numbered(1..=20).replace("l18\n", "L18\n"));
 }
 
 #[test]
@@ -339,14 +311,8 @@ fn apply_hunk_unstages_one_of_two_staged_hunks() {
 
     let cached = fx.git(&["diff", "--cached"]);
     let unstaged = fx.git(&["diff"]);
-    assert!(
-        cached.contains("+L3") && !cached.contains("+new"),
-        "{cached}"
-    );
-    assert!(
-        unstaged.contains("+new") && !unstaged.contains("L3"),
-        "{unstaged}"
-    );
+    assert!(cached.contains("+L3") && !cached.contains("+new"), "{cached}");
+    assert!(unstaged.contains("+new") && !unstaged.contains("L3"), "{unstaged}");
 
     // And the first one from the same diff.
     fx.repo.apply_hunk(&diff, 0, DiffSide::Staged).unwrap();
@@ -366,11 +332,7 @@ fn apply_lines_stages_selected_lines_only() {
     fx.commit_file("f.txt", "a\nb\nc\n");
     fx.write("f.txt", "a\nX\nY\nc\n");
     let diff = fx.diff("f.txt", DiffSide::Unstaged);
-    let lines: Vec<_> = diff.hunks[0]
-        .lines
-        .iter()
-        .map(|l| (l.kind, l.text.as_str()))
-        .collect();
+    let lines: Vec<_> = diff.hunks[0].lines.iter().map(|l| (l.kind, l.text.as_str())).collect();
     assert_eq!(
         lines,
         [
@@ -383,9 +345,7 @@ fn apply_lines_stages_selected_lines_only() {
     );
 
     // Only "+Y" (context indices in the selection are ignored).
-    fx.repo
-        .apply_lines(&diff, 0, &[0, 3, 4], DiffSide::Unstaged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[0, 3, 4], DiffSide::Unstaged).unwrap();
     assert_eq!(fx.index_str("f.txt"), "a\nb\nY\nc\n");
 
     // Then only the removal of "b", from a fresh diff.
@@ -395,21 +355,13 @@ fn apply_lines_stages_selected_lines_only() {
         .iter()
         .position(|l| l.kind == LineKind::Removed)
         .unwrap();
-    fx.repo
-        .apply_lines(&diff, 0, &[b], DiffSide::Unstaged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[b], DiffSide::Unstaged).unwrap();
     assert_eq!(fx.index_str("f.txt"), "a\nY\nc\n");
 
     // Nothing selected / out of range.
     let diff = fx.diff("f.txt", DiffSide::Unstaged);
-    assert!(fx
-        .repo
-        .apply_lines(&diff, 0, &[0], DiffSide::Unstaged)
-        .is_err());
-    assert!(fx
-        .repo
-        .apply_lines(&diff, 0, &[99], DiffSide::Unstaged)
-        .is_err());
+    assert!(fx.repo.apply_lines(&diff, 0, &[0], DiffSide::Unstaged).is_err());
+    assert!(fx.repo.apply_lines(&diff, 0, &[99], DiffSide::Unstaged).is_err());
     assert!(fx.repo.apply_hunk(&diff, 5, DiffSide::Unstaged).is_err());
     assert_eq!(fx.index_str("f.txt"), "a\nY\nc\n");
 }
@@ -422,9 +374,7 @@ fn apply_lines_unstages_selected_lines_only() {
     fx.git(&["add", "f.txt"]);
     let diff = fx.diff("f.txt", DiffSide::Staged);
     // Unstage "+X": "Y" and the removal of "b" stay staged.
-    fx.repo
-        .apply_lines(&diff, 0, &[2], DiffSide::Staged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[2], DiffSide::Staged).unwrap();
     assert_eq!(fx.index_str("f.txt"), "a\nY\nc\n");
 
     // Unstage the removal of "b".
@@ -434,9 +384,7 @@ fn apply_lines_unstages_selected_lines_only() {
         .iter()
         .position(|l| l.kind == LineKind::Removed)
         .unwrap();
-    fx.repo
-        .apply_lines(&diff, 0, &[b], DiffSide::Staged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[b], DiffSide::Staged).unwrap();
     assert_eq!(fx.index_str("f.txt"), "a\nb\nY\nc\n");
 }
 
@@ -447,9 +395,7 @@ fn untracked_file_partial_then_full_equals_git_add() {
     fx.write("new.txt", "one\ntwo\nthree\n");
 
     let diff = fx.diff("new.txt", DiffSide::Unstaged);
-    fx.repo
-        .apply_lines(&diff, 0, &[1], DiffSide::Unstaged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[1], DiffSide::Unstaged).unwrap();
     assert_eq!(fx.index_str("new.txt"), "two\n");
     assert_eq!(fx.porcelain(), "AM new.txt\n");
 
@@ -488,9 +434,7 @@ fn intent_to_add_file_can_be_staged_by_lines() {
     fx.git(&["add", "-N", "ita.txt"]);
     let diff = fx.diff("ita.txt", DiffSide::Unstaged);
     assert_eq!(diff.hunks.len(), 1);
-    fx.repo
-        .apply_lines(&diff, 0, &[0], DiffSide::Unstaged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[0], DiffSide::Unstaged).unwrap();
     assert_eq!(fx.index_str("ita.txt"), "one\n");
 }
 
@@ -502,9 +446,7 @@ fn unstage_new_file_partially_and_fully() {
     fx.git(&["add", "new.txt"]);
 
     let diff = fx.diff("new.txt", DiffSide::Staged);
-    fx.repo
-        .apply_lines(&diff, 0, &[0], DiffSide::Staged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[0], DiffSide::Staged).unwrap();
     assert_eq!(fx.index_str("new.txt"), "b\n");
 
     let diff = fx.diff("new.txt", DiffSide::Staged);
@@ -530,9 +472,7 @@ fn deleted_file_staged_and_unstaged_via_hunk() {
 
     // Staging only some removed lines keeps the file with the rest.
     let diff = fx.diff("gone.txt", DiffSide::Unstaged);
-    fx.repo
-        .apply_lines(&diff, 0, &[0], DiffSide::Unstaged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[0], DiffSide::Unstaged).unwrap();
     assert_eq!(fx.index_str("gone.txt"), "y\n");
 }
 
@@ -549,18 +489,12 @@ fn no_newline_at_eof_both_sides() {
     assert!(removed.no_newline_at_eof && removed.text == "b");
 
     fx.repo.apply_hunk(&diff, 1, DiffSide::Unstaged).unwrap();
-    assert_eq!(
-        fx.index("f.txt"),
-        format!("{}a\nB", numbered(1..=10)).into_bytes()
-    );
+    assert_eq!(fx.index("f.txt"), format!("{}a\nB", numbered(1..=10)).into_bytes());
 
     fx.git(&["add", "f.txt"]);
     let diff = fx.diff("f.txt", DiffSide::Staged);
     fx.repo.apply_hunk(&diff, 1, DiffSide::Staged).unwrap();
-    assert_eq!(
-        fx.index("f.txt"),
-        format!("L1\n{}a\nb", numbered(2..=10)).into_bytes()
-    );
+    assert_eq!(fx.index("f.txt"), format!("L1\n{}a\nb", numbered(2..=10)).into_bytes());
 }
 
 #[test]
@@ -585,15 +519,10 @@ fn newline_added_or_removed_at_eof() {
         ]
     );
     // "z" alone cannot be staged: "y" would still have no newline.
-    let err = fx
-        .repo
-        .apply_lines(&diff, 0, &[3], DiffSide::Unstaged)
-        .unwrap_err();
+    let err = fx.repo.apply_lines(&diff, 0, &[3], DiffSide::Unstaged).unwrap_err();
     assert!(format!("{err:#}").contains("newline"), "{err:#}");
     // Fixing the newline alone can.
-    fx.repo
-        .apply_lines(&diff, 0, &[1, 2], DiffSide::Unstaged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[1, 2], DiffSide::Unstaged).unwrap();
     assert_eq!(fx.index("f.txt"), b"x\ny\n");
     let diff = fx.diff("f.txt", DiffSide::Unstaged);
     fx.repo.apply_hunk(&diff, 0, DiffSide::Unstaged).unwrap();
@@ -612,28 +541,21 @@ fn crlf_file_is_staged_byte_exact() {
     let fx = Fixture::new();
     let base: String = (1..=12).map(|i| format!("r{i}\r\n")).collect();
     fx.commit_file("w.txt", &base);
-    let changed = base
-        .replace("r2\r\n", "R2\r\n")
-        .replace("r11\r\n", "r11\r\nextra\r\n");
+    let changed = base.replace("r2\r\n", "R2\r\n").replace("r11\r\n", "r11\r\nextra\r\n");
     fx.write("w.txt", &changed);
 
     let diff = fx.diff("w.txt", DiffSide::Unstaged);
     assert_eq!(diff.hunks.len(), 2);
     assert_eq!(diff.hunks[0].lines[1].text, "r2\r");
     fx.repo.apply_hunk(&diff, 0, DiffSide::Unstaged).unwrap();
-    assert_eq!(
-        fx.index("w.txt"),
-        base.replace("r2\r\n", "R2\r\n").into_bytes()
-    );
+    assert_eq!(fx.index("w.txt"), base.replace("r2\r\n", "R2\r\n").into_bytes());
     let diff = fx.diff("w.txt", DiffSide::Unstaged);
     let extra = diff.hunks[0]
         .lines
         .iter()
         .position(|l| l.kind == LineKind::Added)
         .unwrap();
-    fx.repo
-        .apply_lines(&diff, 0, &[extra], DiffSide::Unstaged)
-        .unwrap();
+    fx.repo.apply_lines(&diff, 0, &[extra], DiffSide::Unstaged).unwrap();
     assert_eq!(fx.index("w.txt"), changed.into_bytes());
 }
 
@@ -644,20 +566,14 @@ fn stale_diff_is_rejected() {
     // Change the working tree inside hunk 0 after the diff was taken.
     fx.write("f.txt", two_hunks_worktree().replace("L3\n", "L3 edited\n"));
     let before = fx.index("f.txt");
-    let err = fx
-        .repo
-        .apply_hunk(&diff, 0, DiffSide::Unstaged)
-        .unwrap_err();
+    let err = fx.repo.apply_hunk(&diff, 0, DiffSide::Unstaged).unwrap_err();
     assert_eq!(error_kind(&err), GitErrorKind::Other);
     assert!(
         friendly_message(&err).starts_with("The file changed"),
         "{}",
         friendly_message(&err)
     );
-    assert!(fx
-        .repo
-        .apply_lines(&diff, 0, &[3], DiffSide::Unstaged)
-        .is_err());
+    assert!(fx.repo.apply_lines(&diff, 0, &[3], DiffSide::Unstaged).is_err());
     assert_eq!(fx.index("f.txt"), before);
 
     // Index changed underneath a Staged diff: unstaging fails too.
@@ -679,41 +595,25 @@ fn zero_context_and_special_paths() {
     fx.commit_file("my file é.txt", numbered(1..=10));
     fx.write(
         "my file é.txt",
-        numbered(1..=10)
-            .replace("l4\n", "L4\nL4b\n")
-            .replace("l8\n", ""),
+        numbered(1..=10).replace("l4\n", "L4\nL4b\n").replace("l8\n", ""),
     );
     let diff = fx
         .repo
         .diff_file(Path::new("my file é.txt"), DiffSide::Unstaged, 0, ALL)
         .unwrap();
     assert_eq!(diff.hunks.len(), 2);
-    assert!(diff.hunks[0]
-        .lines
-        .iter()
-        .all(|l| l.kind != LineKind::Context));
+    assert!(diff.hunks[0].lines.iter().all(|l| l.kind != LineKind::Context));
     // Stage the deletion of l8 (second hunk), then "L4b" alone.
     fx.repo.apply_hunk(&diff, 1, DiffSide::Unstaged).unwrap();
-    assert_eq!(
-        fx.index_str("my file é.txt"),
-        numbered(1..=10).replace("l8\n", "")
-    );
+    assert_eq!(fx.index_str("my file é.txt"), numbered(1..=10).replace("l8\n", ""));
     let diff = fx
         .repo
         .diff_file(Path::new("my file é.txt"), DiffSide::Unstaged, 0, ALL)
         .unwrap();
-    let l4b = diff.hunks[0]
-        .lines
-        .iter()
-        .position(|l| l.text == "L4b")
-        .unwrap();
-    fx.repo
-        .apply_lines(&diff, 0, &[l4b], DiffSide::Unstaged)
-        .unwrap();
+    let l4b = diff.hunks[0].lines.iter().position(|l| l.text == "L4b").unwrap();
+    fx.repo.apply_lines(&diff, 0, &[l4b], DiffSide::Unstaged).unwrap();
     assert_eq!(
         fx.index_str("my file é.txt"),
-        numbered(1..=10)
-            .replace("l4\n", "l4\nL4b\n")
-            .replace("l8\n", "")
+        numbered(1..=10).replace("l4\n", "l4\nL4b\n").replace("l8\n", "")
     );
 }

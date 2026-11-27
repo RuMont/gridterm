@@ -82,13 +82,36 @@ pub fn is_light() -> bool {
 }
 
 pub fn tokens() -> &'static Tokens {
-    if is_light() { &LIGHT } else { &DARK }
+    if is_light() {
+        &LIGHT
+    } else {
+        &DARK
+    }
 }
 
 macro_rules! token_fns {
     ($($name:ident),*) => { $(pub fn $name() -> u32 { tokens().$name })* };
 }
-token_fns!(base, mantle, crust, surface0, surface1, overlay0, subtext, text, accent, accent_hover, on_accent, green, yellow, red, peach, mauve, match_bg, backdrop);
+token_fns!(
+    base,
+    mantle,
+    crust,
+    surface0,
+    surface1,
+    overlay0,
+    subtext,
+    text,
+    accent,
+    accent_hover,
+    on_accent,
+    green,
+    yellow,
+    red,
+    peach,
+    mauve,
+    match_bg,
+    backdrop
+);
 
 /// `accent` with the given alpha (0–255), as RGBA.
 pub fn accent_alpha(alpha: u8) -> u32 {
@@ -116,7 +139,11 @@ mod tests {
         let lum = |c: u32| {
             let ch = |v: u32| {
                 let v = v as f64 / 255.0;
-                if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
             };
             0.2126 * ch(c >> 16 & 0xff) + 0.7152 * ch(c >> 8 & 0xff) + 0.0722 * ch(c & 0xff)
         };

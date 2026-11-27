@@ -49,7 +49,9 @@ pub fn file_url_path(url: &str) -> Option<PathBuf> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok());
             if let Some(b) = hex {
                 out.push(b);
                 i += 3;
@@ -103,7 +105,10 @@ pub fn classify(path: &Path) -> Option<Target> {
     }
     let dir = path.parent().unwrap_or(Path::new("/")).to_path_buf();
     if is_executable(path) || interpreter(path).is_some() {
-        return Some(Target::Run { dir, line: run_line(path) });
+        return Some(Target::Run {
+            dir,
+            line: run_line(path),
+        });
     }
     Some(Target::File(path.to_path_buf()))
 }
@@ -128,7 +133,10 @@ impl OpenRequest {
         if self.command.trim().is_empty() {
             Target::Folder(dir)
         } else {
-            Target::Run { dir, line: self.command.clone() }
+            Target::Run {
+                dir,
+                line: self.command.clone(),
+            }
         }
     }
 }
@@ -142,9 +150,16 @@ pub(crate) fn write_request(request: &OpenRequest) -> io::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
     let dir = requests_dir().ok_or_else(|| io::Error::other("no home directory"))?;
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
-    let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
     let path = dir.join(format!("open-{}-{nanos}.{REQUEST_EXT}", std::process::id()));
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
     use std::io::Write as _;
     file.write_all(serde_json::to_string(request).map_err(io::Error::other)?.as_bytes())?;
     Ok(path)
@@ -166,7 +181,11 @@ pub fn take_request(path: &Path) -> Option<OpenRequest> {
     let meta = std::fs::symlink_metadata(&path).ok()?;
     // SAFETY: getuid has no failure modes.
     let ours = meta.is_file() && meta.uid() == unsafe { libc::getuid() };
-    let fresh = meta.modified().ok().and_then(|m| m.elapsed().ok()).is_some_and(|age| age < REQUEST_MAX_AGE);
+    let fresh = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.elapsed().ok())
+        .is_some_and(|age| age < REQUEST_MAX_AGE);
     let text = std::fs::read_to_string(&path).ok();
     let _ = std::fs::remove_file(&path);
     if !(ours && fresh) {
@@ -214,14 +233,19 @@ fn parse_open(args: &[String]) -> Result<OpenRequest, String> {
     if !dir.is_dir() {
         return Err(format!("{}: not a folder", dir.display()));
     }
-    Ok(OpenRequest { cwd: Some(dir), command: command_line(after) })
+    Ok(OpenRequest {
+        cwd: Some(dir),
+        command: command_line(after),
+    })
 }
 
 /// The `.app` this binary runs from, if any (to open requests with this
 /// very build rather than whichever gridterm macOS knows by its id).
 fn own_bundle() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(Path::to_path_buf)
+    exe.ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))
+        .map(Path::to_path_buf)
 }
 
 /// `gridterm open …`: returns the process exit code.
@@ -267,8 +291,14 @@ mod tests {
 
     #[test]
     fn file_urls_decode() {
-        assert_eq!(file_url_path("file:///Users/me/My%20Project/"), Some(PathBuf::from("/Users/me/My Project")));
-        assert_eq!(file_url_path("file://localhost/tmp/a%C3%B1o.sh"), Some(PathBuf::from("/tmp/año.sh")));
+        assert_eq!(
+            file_url_path("file:///Users/me/My%20Project/"),
+            Some(PathBuf::from("/Users/me/My Project"))
+        );
+        assert_eq!(
+            file_url_path("file://localhost/tmp/a%C3%B1o.sh"),
+            Some(PathBuf::from("/tmp/año.sh"))
+        );
         assert_eq!(file_url_path("file:///"), Some(PathBuf::from("/")));
         assert_eq!(file_url_path("https://example.com"), None);
         assert_eq!(file_url_path("file:///odd%2"), Some(PathBuf::from("/odd%2")));
@@ -289,9 +319,27 @@ mod tests {
         std::fs::write(&text, "hi\n").unwrap();
 
         assert_eq!(classify(&d), Some(Target::Folder(d.clone())));
-        assert_eq!(classify(&exe), Some(Target::Run { dir: d.clone(), line: shell_quote(&exe.to_string_lossy()) }));
-        assert_eq!(classify(&cmd), Some(Target::Run { dir: d.clone(), line: format!("sh {}", shell_quote(&cmd.to_string_lossy())) }));
-        assert_eq!(classify(&zsh), Some(Target::Run { dir: d.clone(), line: format!("zsh {}", shell_quote(&zsh.to_string_lossy())) }));
+        assert_eq!(
+            classify(&exe),
+            Some(Target::Run {
+                dir: d.clone(),
+                line: shell_quote(&exe.to_string_lossy())
+            })
+        );
+        assert_eq!(
+            classify(&cmd),
+            Some(Target::Run {
+                dir: d.clone(),
+                line: format!("sh {}", shell_quote(&cmd.to_string_lossy()))
+            })
+        );
+        assert_eq!(
+            classify(&zsh),
+            Some(Target::Run {
+                dir: d.clone(),
+                line: format!("zsh {}", shell_quote(&zsh.to_string_lossy()))
+            })
+        );
         assert_eq!(classify(&text), Some(Target::File(text.clone())));
         assert_eq!(classify(&d.join("missing")), None);
     }
@@ -300,7 +348,13 @@ mod tests {
     fn open_arguments() {
         let here = std::env::current_dir().unwrap().canonicalize().unwrap();
         let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-        assert_eq!(parse_open(&[]).unwrap(), OpenRequest { cwd: Some(here.clone()), command: String::new() });
+        assert_eq!(
+            parse_open(&[]).unwrap(),
+            OpenRequest {
+                cwd: Some(here.clone()),
+                command: String::new()
+            }
+        );
         let r = parse_open(&s(&["/tmp", "--", "npm", "run", "a b"])).unwrap();
         assert_eq!(r.command, "npm run 'a b'");
         let r = parse_open(&s(&["/tmp", "--", "npm i && npm start"])).unwrap();
@@ -311,9 +365,21 @@ mod tests {
 
     #[test]
     fn requests_target() {
-        let r = OpenRequest { cwd: Some(PathBuf::from("/tmp")), command: "ls".into() };
-        assert_eq!(r.target(), Target::Run { dir: PathBuf::from("/tmp"), line: "ls".into() });
-        let r = OpenRequest { cwd: Some(PathBuf::from("/tmp")), command: " ".into() };
+        let r = OpenRequest {
+            cwd: Some(PathBuf::from("/tmp")),
+            command: "ls".into(),
+        };
+        assert_eq!(
+            r.target(),
+            Target::Run {
+                dir: PathBuf::from("/tmp"),
+                line: "ls".into()
+            }
+        );
+        let r = OpenRequest {
+            cwd: Some(PathBuf::from("/tmp")),
+            command: " ".into(),
+        };
         assert_eq!(r.target(), Target::Folder(PathBuf::from("/tmp")));
     }
 }

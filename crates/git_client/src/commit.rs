@@ -49,7 +49,9 @@ impl GitRepo {
     pub fn commit_details(&self, sha: &str, context_lines: u32, max_lines: usize) -> Result<CommitDetails> {
         let repo = self.repo()?;
         let oid = Oid::from_str(sha).with_context(|| format!("bad commit id {sha}"))?;
-        let commit = repo.find_commit(oid).with_context(|| format!("commit {sha} not found"))?;
+        let commit = repo
+            .find_commit(oid)
+            .with_context(|| format!("commit {sha} not found"))?;
         let tree = commit.tree()?;
         let parent_tree = match commit.parent(0) {
             Ok(p) => Some(p.tree()?),
@@ -72,9 +74,21 @@ impl GitRepo {
                 Delta::Typechange => 'T',
                 _ => 'M',
             };
-            let path = delta.new_file().path().or(delta.old_file().path()).map(PathBuf::from).unwrap_or_default();
-            let old_path = matches!(status, 'R' | 'C').then(|| delta.old_file().path().map(PathBuf::from)).flatten();
-            let mut file_diff = FileDiff { path, binary: delta.flags().is_binary(), hunks: Vec::new(), truncated: false };
+            let path = delta
+                .new_file()
+                .path()
+                .or(delta.old_file().path())
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            let old_path = matches!(status, 'R' | 'C')
+                .then(|| delta.old_file().path().map(PathBuf::from))
+                .flatten();
+            let mut file_diff = FileDiff {
+                path,
+                binary: delta.flags().is_binary(),
+                hunks: Vec::new(),
+                truncated: false,
+            };
             let (mut added, mut removed) = (0, 0);
             if let Some(patch) = Patch::from_diff(&diff, idx)? {
                 if patch.delta().flags().is_binary() {
@@ -87,8 +101,15 @@ impl GitRepo {
                     }
                 }
             }
-            truncated |= file_diff.truncated || (total >= max_lines && file_diff.hunks.is_empty() && !file_diff.binary && added + removed > 0);
-            files.push(CommitFile { status, old_path, added, removed, diff: file_diff });
+            truncated |= file_diff.truncated
+                || (total >= max_lines && file_diff.hunks.is_empty() && !file_diff.binary && added + removed > 0);
+            files.push(CommitFile {
+                status,
+                old_path,
+                added,
+                removed,
+                diff: file_diff,
+            });
         }
 
         let author = commit.author();
@@ -156,7 +177,9 @@ pub fn commit_web_url(url: &str, sha: &str) -> Option<String> {
     if host == "ssh.dev.azure.com" {
         let mut parts = path.trim_start_matches("v3/").splitn(3, '/');
         let (org, project, repo) = (parts.next()?, parts.next()?, parts.next()?);
-        return Some(format!("https://dev.azure.com/{org}/{project}/_git/{repo}/commit/{sha}"));
+        return Some(format!(
+            "https://dev.azure.com/{org}/{project}/_git/{repo}/commit/{sha}"
+        ));
     }
     let base = format!("https://{host}/{path}");
     Some(if host.contains("gitlab") {
@@ -175,11 +198,26 @@ mod tests {
     #[test]
     fn web_urls_of_common_remotes() {
         let sha = "abc123";
-        assert_eq!(commit_web_url("git@github.com:me/proj.git", sha).as_deref(), Some("https://github.com/me/proj/commit/abc123"));
-        assert_eq!(commit_web_url("https://github.com/me/proj", sha).as_deref(), Some("https://github.com/me/proj/commit/abc123"));
-        assert_eq!(commit_web_url("https://user:tok@gitlab.example.com/grp/sub/proj.git", sha).as_deref(), Some("https://gitlab.example.com/grp/sub/proj/-/commit/abc123"));
-        assert_eq!(commit_web_url("ssh://git@bitbucket.org:22/team/proj.git", sha).as_deref(), Some("https://bitbucket.org/team/proj/commits/abc123"));
-        assert_eq!(commit_web_url("git@ssh.dev.azure.com:v3/org/proj/repo", sha).as_deref(), Some("https://dev.azure.com/org/proj/_git/repo/commit/abc123"));
+        assert_eq!(
+            commit_web_url("git@github.com:me/proj.git", sha).as_deref(),
+            Some("https://github.com/me/proj/commit/abc123")
+        );
+        assert_eq!(
+            commit_web_url("https://github.com/me/proj", sha).as_deref(),
+            Some("https://github.com/me/proj/commit/abc123")
+        );
+        assert_eq!(
+            commit_web_url("https://user:tok@gitlab.example.com/grp/sub/proj.git", sha).as_deref(),
+            Some("https://gitlab.example.com/grp/sub/proj/-/commit/abc123")
+        );
+        assert_eq!(
+            commit_web_url("ssh://git@bitbucket.org:22/team/proj.git", sha).as_deref(),
+            Some("https://bitbucket.org/team/proj/commits/abc123")
+        );
+        assert_eq!(
+            commit_web_url("git@ssh.dev.azure.com:v3/org/proj/repo", sha).as_deref(),
+            Some("https://dev.azure.com/org/proj/_git/repo/commit/abc123")
+        );
         assert_eq!(commit_web_url("/srv/git/proj.git", sha), None);
         assert_eq!(commit_web_url("../remote.git", sha), None);
     }

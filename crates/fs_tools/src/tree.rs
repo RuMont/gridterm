@@ -70,33 +70,22 @@ pub fn read_dir(dir: &Path, opts: TreeOptions) -> io::Result<Vec<DirEntryInfo>> 
     });
 
     let default = TreeOptions::default();
-    if opts.show_hidden != default.show_hidden
-        || opts.respect_gitignore != default.respect_gitignore
-    {
+    if opts.show_hidden != default.show_hidden || opts.respect_gitignore != default.respect_gitignore {
         // Something may have been revealed: diff against the filtered listing.
-        let visible: HashSet<OsString> =
-            walk_level(dir, default, |entry| entry.file_name().to_os_string())
-                .into_iter()
-                .collect();
+        let visible: HashSet<OsString> = walk_level(dir, default, |entry| entry.file_name().to_os_string())
+            .into_iter()
+            .collect();
         for e in &mut entries {
             let file_name = e.path.file_name().map(|n| n.to_os_string());
             e.is_ignored_or_hidden = file_name.is_none_or(|n| !visible.contains(&n));
         }
     }
 
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| natural_cmp(&a.name, &b.name))
-    });
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| natural_cmp(&a.name, &b.name)));
     Ok(entries)
 }
 
-fn walk_level<T>(
-    dir: &Path,
-    opts: TreeOptions,
-    mut map: impl FnMut(ignore::DirEntry) -> T,
-) -> Vec<T> {
+fn walk_level<T>(dir: &Path, opts: TreeOptions, mut map: impl FnMut(ignore::DirEntry) -> T) -> Vec<T> {
     let walker = WalkBuilder::new(dir)
         .max_depth(Some(1))
         .parents(true)

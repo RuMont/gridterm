@@ -73,16 +73,72 @@ const V: Option<&str> = Some(crate::viewer::VIEWER_CONTEXT);
 /// Every rebindable command, in the order the editor lists them.
 pub static COMMANDS: &[Command] = &[
     cmd!("new_terminal", "General", "New terminal", None, ["cmd-t"], NewTerminal),
-    cmd!("close_terminal", "General", "Close terminal", None, ["cmd-w"], CloseTerminal),
-    cmd!("toggle_zoom", "General", "Zoom the active cell", None, ["cmd-shift-enter"], ToggleZoom),
-    cmd!("toggle_sidebar", "General", "Show/hide the sidebar", None, ["cmd-b"], ToggleSidebar),
+    cmd!(
+        "close_terminal",
+        "General",
+        "Close terminal",
+        None,
+        ["cmd-w"],
+        CloseTerminal
+    ),
+    cmd!(
+        "toggle_zoom",
+        "General",
+        "Zoom the active cell",
+        None,
+        ["cmd-shift-enter"],
+        ToggleZoom
+    ),
+    cmd!(
+        "toggle_sidebar",
+        "General",
+        "Show/hide the sidebar",
+        None,
+        ["cmd-b"],
+        ToggleSidebar
+    ),
     cmd!("show_settings", "General", "Settings", None, ["cmd-,"], ShowSettings),
     cmd!("show_git", "Panels", "Git", None, ["cmd-shift-g"], ShowGit),
-    cmd!("show_explorer", "Panels", "Explorer", None, ["cmd-shift-e"], ShowExplorer),
-    cmd!("show_search", "Panels", "Find file (palette)", None, ["cmd-p"], ShowSearch),
-    cmd!("show_content_search", "Panels", "Search in files", None, ["cmd-shift-f"], ShowContentSearch),
-    cmd!("focus_left", "Focus", "Cell to the left", None, ["cmd-alt-left"], FocusLeft),
-    cmd!("focus_right", "Focus", "Cell to the right", None, ["cmd-alt-right"], FocusRight),
+    cmd!(
+        "show_explorer",
+        "Panels",
+        "Explorer",
+        None,
+        ["cmd-shift-e"],
+        ShowExplorer
+    ),
+    cmd!(
+        "show_search",
+        "Panels",
+        "Find file (palette)",
+        None,
+        ["cmd-p"],
+        ShowSearch
+    ),
+    cmd!(
+        "show_content_search",
+        "Panels",
+        "Search in files",
+        None,
+        ["cmd-shift-f"],
+        ShowContentSearch
+    ),
+    cmd!(
+        "focus_left",
+        "Focus",
+        "Cell to the left",
+        None,
+        ["cmd-alt-left"],
+        FocusLeft
+    ),
+    cmd!(
+        "focus_right",
+        "Focus",
+        "Cell to the right",
+        None,
+        ["cmd-alt-right"],
+        FocusRight
+    ),
     cmd!("focus_up", "Focus", "Cell above", None, ["cmd-alt-up"], FocusUp),
     cmd!("focus_down", "Focus", "Cell below", None, ["cmd-alt-down"], FocusDown),
     cmd!("focus_terminal_1", "Focus", "Cell 1", None, ["cmd-1"], FocusTerminal1),
@@ -94,17 +150,73 @@ pub static COMMANDS: &[Command] = &[
     cmd!("focus_terminal_7", "Focus", "Cell 7", None, ["cmd-7"], FocusTerminal7),
     cmd!("focus_terminal_8", "Focus", "Cell 8", None, ["cmd-8"], FocusTerminal8),
     cmd!("focus_terminal_9", "Focus", "Cell 9", None, ["cmd-9"], FocusTerminal9),
-    cmd!("next_tab", "Focus", "Next tab of the cell", None, ["cmd-}", "cmd-shift-]"], NextTab),
-    cmd!("prev_tab", "Focus", "Previous tab of the cell", None, ["cmd-{", "cmd-shift-["], PrevTab),
+    cmd!(
+        "next_tab",
+        "Focus",
+        "Next tab of the cell",
+        None,
+        ["cmd-}", "cmd-shift-]"],
+        NextTab
+    ),
+    cmd!(
+        "prev_tab",
+        "Focus",
+        "Previous tab of the cell",
+        None,
+        ["cmd-{", "cmd-shift-["],
+        PrevTab
+    ),
     cmd!("copy", "Terminal", "Copy selection", T, ["cmd-c"], term::Copy),
     cmd!("paste", "Terminal", "Paste", T, ["cmd-v"], term::Paste),
     cmd!("clear", "Terminal", "Clear", T, ["cmd-k"], term::Clear),
-    cmd!("scroll_page_up", "Terminal", "Scroll a page up", T, ["shift-pageup"], term::ScrollPageUp),
-    cmd!("scroll_page_down", "Terminal", "Scroll a page down", T, ["shift-pagedown"], term::ScrollPageDown),
-    cmd!("scroll_to_top", "Terminal", "Scroll to the top", T, ["cmd-home"], term::ScrollToTop),
-    cmd!("scroll_to_bottom", "Terminal", "Scroll to the bottom", T, ["cmd-end"], term::ScrollToBottom),
-    cmd!("send_to_agent", "File viewer", "Send selection to the agent", V, ["alt-cmd-k"], SendToAgent),
-    cmd!("go_to_definition", "File viewer", "Go to definition", V, ["f12"], gpui_kit::component::input::GoToDefinition),
+    cmd!(
+        "scroll_page_up",
+        "Terminal",
+        "Scroll a page up",
+        T,
+        ["shift-pageup"],
+        term::ScrollPageUp
+    ),
+    cmd!(
+        "scroll_page_down",
+        "Terminal",
+        "Scroll a page down",
+        T,
+        ["shift-pagedown"],
+        term::ScrollPageDown
+    ),
+    cmd!(
+        "scroll_to_top",
+        "Terminal",
+        "Scroll to the top",
+        T,
+        ["cmd-home"],
+        term::ScrollToTop
+    ),
+    cmd!(
+        "scroll_to_bottom",
+        "Terminal",
+        "Scroll to the bottom",
+        T,
+        ["cmd-end"],
+        term::ScrollToBottom
+    ),
+    cmd!(
+        "send_to_agent",
+        "File viewer",
+        "Send selection to the agent",
+        V,
+        ["alt-cmd-k"],
+        SendToAgent
+    ),
+    cmd!(
+        "go_to_definition",
+        "File viewer",
+        "Go to definition",
+        V,
+        ["f12"],
+        gpui_kit::component::input::GoToDefinition
+    ),
 ];
 
 pub fn command(id: &str) -> Option<&'static Command> {
@@ -143,7 +255,11 @@ pub fn bind_keys(cx: &mut App, keymap: &config::Keymap) {
         KeyBinding::new("escape", CloseHistory, Some(HISTORY_CONTEXT)),
         KeyBinding::new("escape", CancelShrink, Some(SHRINK_CONTEXT)),
         KeyBinding::new("escape", ShowTerminalTab, V),
-        KeyBinding::new("escape", crate::keymap_editor::CloseKeymapEditor, Some(crate::keymap_editor::KEYMAP_CONTEXT)),
+        KeyBinding::new(
+            "escape",
+            crate::keymap_editor::CloseKeymapEditor,
+            Some(crate::keymap_editor::KEYMAP_CONTEXT),
+        ),
         // gpui-kit's Root binds tab/shift-tab to moving focus. In a terminal
         // they belong to the program (completion, Claude Code's mode switch):
         // unbinding them here lets the key reach the terminal's key handler.
@@ -153,7 +269,10 @@ pub fn bind_keys(cx: &mut App, keymap: &config::Keymap) {
     let os = cx.platform_info().os;
     let mut bindings = Vec::new();
     for cmd in COMMANDS {
-        let context = cmd.context.and_then(|c| KeyBindingContextPredicate::parse(c).ok()).map(std::rc::Rc::new);
+        let context = cmd
+            .context
+            .and_then(|c| KeyBindingContextPredicate::parse(c).ok())
+            .map(std::rc::Rc::new);
         for key in keys_of(keymap, cmd) {
             if Keystroke::parse_with_os(&key, os).is_err() {
                 log::warn!("keymap: invalid shortcut {key:?} for {}", cmd.id);
@@ -170,7 +289,9 @@ pub fn bind_keys(cx: &mut App, keymap: &config::Keymap) {
 
 /// How a shortcut is shown (⇧⌘G), or the raw text if it does not parse.
 pub fn display_key(key: &str, os: OperatingSystem) -> String {
-    let Ok(k) = Keystroke::parse_with_os(key, os) else { return key.to_string() };
+    let Ok(k) = Keystroke::parse_with_os(key, os) else {
+        return key.to_string();
+    };
     let named = match k.key.as_str() {
         "enter" => Some("↩"),
         "pageup" => Some("PgUp"),
@@ -185,7 +306,10 @@ pub fn display_key(key: &str, os: OperatingSystem) -> String {
     match named {
         // Modifiers as GPUI draws them, then the key's usual name.
         Some(name) => {
-            let mods = Keystroke { key: String::new(), ..k.clone() };
+            let mods = Keystroke {
+                key: String::new(),
+                ..k.clone()
+            };
             format!("{}{name}", mods.display(os))
         }
         None => k.display(os).to_string(),

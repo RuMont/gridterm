@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 pub enum LinkTarget {
     Url(String),
     /// Existing file or directory, with an optional `:line` suffix.
-    Path { path: PathBuf, line: Option<u32> },
+    Path {
+        path: PathBuf,
+        line: Option<u32>,
+    },
 }
 
 /// Finds the link covering column `col` of `line` (one char per column).
@@ -54,13 +57,23 @@ pub fn find_link(line: &[char], col: usize, cwd: Option<&Path>) -> Option<(Range
     } else {
         PathBuf::from(path_part)
     };
-    let full = if expanded.is_absolute() { expanded } else { cwd?.join(expanded) };
+    let full = if expanded.is_absolute() {
+        expanded
+    } else {
+        cwd?.join(expanded)
+    };
     if !full.exists() {
         return None;
     }
     let s = start + lead;
     let e = s + trimmed.chars().count();
-    (col >= s && col < e).then_some((s..e, LinkTarget::Path { path: full, line: line_no }))
+    (col >= s && col < e).then_some((
+        s..e,
+        LinkTarget::Path {
+            path: full,
+            line: line_no,
+        },
+    ))
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -72,14 +85,18 @@ fn is_separator(c: char) -> bool {
 }
 
 fn url_start(token: &str) -> Option<usize> {
-    ["https://", "http://", "file://", "ftp://"].iter().filter_map(|s| token.find(s)).min()
+    ["https://", "http://", "file://", "ftp://"]
+        .iter()
+        .filter_map(|s| token.find(s))
+        .min()
 }
 
 fn trim_trailing_punctuation(s: &str) -> &str {
     let mut s = s;
     loop {
         let Some(last) = s.chars().last() else { return s };
-        let unbalanced_close = |open: char, close: char| last == close && s.matches(open).count() < s.matches(close).count();
+        let unbalanced_close =
+            |open: char, close: char| last == close && s.matches(open).count() < s.matches(close).count();
         if matches!(last, '.' | ',' | ';' | ':' | '!' | '?')
             || unbalanced_close('(', ')')
             || unbalanced_close('[', ']')
@@ -135,7 +152,10 @@ mod tests {
     fn url_with_balanced_parens_kept() {
         let l = chars("https://en.wikipedia.org/wiki/Rust_(language)");
         let (_, t) = find_link(&l, 5, None).unwrap();
-        assert_eq!(t, LinkTarget::Url("https://en.wikipedia.org/wiki/Rust_(language)".into()));
+        assert_eq!(
+            t,
+            LinkTarget::Url("https://en.wikipedia.org/wiki/Rust_(language)".into())
+        );
     }
 
     #[test]
@@ -145,13 +165,28 @@ mod tests {
         std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
         let l = chars("error at src/main.rs:12:5: boom");
         let (r, t) = find_link(&l, 12, Some(&dir)).unwrap();
-        assert_eq!(t, LinkTarget::Path { path: dir.join("src/main.rs"), line: Some(12) });
+        assert_eq!(
+            t,
+            LinkTarget::Path {
+                path: dir.join("src/main.rs"),
+                line: Some(12)
+            }
+        );
         assert_eq!(&l[r].iter().collect::<String>(), "src/main.rs:12:5");
-        assert!(find_link(&chars("missing/file.rs"), 3, Some(&dir)).is_none(), "non-existent paths are not links");
+        assert!(
+            find_link(&chars("missing/file.rs"), 3, Some(&dir)).is_none(),
+            "non-existent paths are not links"
+        );
         let abs = format!("({}).", dir.join("src").display());
         let l = chars(&abs);
         let (_, t) = find_link(&l, 3, None).unwrap();
-        assert_eq!(t, LinkTarget::Path { path: dir.join("src"), line: None });
+        assert_eq!(
+            t,
+            LinkTarget::Path {
+                path: dir.join("src"),
+                line: None
+            }
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

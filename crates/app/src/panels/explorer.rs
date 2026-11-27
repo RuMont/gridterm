@@ -33,8 +33,15 @@ pub(crate) struct TreeRow {
 }
 
 pub(crate) enum SearchRow {
-    File { path: PathBuf, rel: String, count: usize },
-    Line { path: PathBuf, line: fs_tools::content::LineMatch },
+    File {
+        path: PathBuf,
+        rel: String,
+        count: usize,
+    },
+    Line {
+        path: PathBuf,
+        line: fs_tools::content::LineMatch,
+    },
 }
 
 #[derive(Default)]
@@ -105,7 +112,10 @@ impl ExplorerPanel {
         });
         Self {
             root: None,
-            opts: TreeOptions { show_hidden: false, respect_gitignore: true },
+            opts: TreeOptions {
+                show_hidden: false,
+                respect_gitignore: true,
+            },
             children: HashMap::new(),
             expanded: HashSet::new(),
             loading: HashSet::new(),
@@ -174,9 +184,10 @@ impl ExplorerPanel {
     /// Content search runs in the selected folder, or the root.
     fn scope(&self) -> Option<PathBuf> {
         let root = self.root.as_ref()?;
-        let selected_dir = self.selected.as_ref().filter(|p| {
-            p.starts_with(root) && self.rows.iter().any(|r| &r.entry.path == *p && r.entry.is_dir)
-        });
+        let selected_dir = self
+            .selected
+            .as_ref()
+            .filter(|p| p.starts_with(root) && self.rows.iter().any(|r| &r.entry.path == *p && r.entry.is_dir));
         Some(selected_dir.unwrap_or(root).clone())
     }
 
@@ -283,7 +294,10 @@ impl ExplorerPanel {
         fn walk(panel: &ExplorerPanel, dir: &Path, depth: usize, rows: &mut Vec<TreeRow>) {
             let Some(entries) = panel.children.get(dir) else { return };
             for entry in entries {
-                rows.push(TreeRow { entry: entry.clone(), depth });
+                rows.push(TreeRow {
+                    entry: entry.clone(),
+                    depth,
+                });
                 if entry.is_dir && panel.expanded.contains(&entry.path) {
                     walk(panel, &entry.path, depth + 1, rows);
                 }
@@ -297,7 +311,9 @@ impl ExplorerPanel {
     }
 
     fn apply_pending_reveal(&mut self) {
-        let Some(target) = self.pending_reveal.clone() else { return };
+        let Some(target) = self.pending_reveal.clone() else {
+            return;
+        };
         if let Some(ix) = self.rows.iter().position(|r| r.entry.path == target) {
             self.selected = Some(target);
             self.pending_reveal = None;
@@ -345,13 +361,21 @@ impl ExplorerPanel {
         if is_dir {
             self.toggle_dir(&path, cx);
         } else {
-            cx.emit(PanelEvent::OpenFile { path, line: None, preview: false });
+            cx.emit(PanelEvent::OpenFile {
+                path,
+                line: None,
+                preview: false,
+            });
         }
     }
 
     /// Single click / Space on a file: preview tab of the active terminal.
     pub(crate) fn preview(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        cx.emit(PanelEvent::OpenFile { path, line: None, preview: true });
+        cx.emit(PanelEvent::OpenFile {
+            path,
+            line: None,
+            preview: true,
+        });
     }
 
     fn on_tree_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -429,16 +453,30 @@ impl ExplorerPanel {
         let root = self.root.clone().unwrap();
         let scope = self.scope().unwrap_or_else(|| root.clone());
         self.search_scope = Some(scope.clone());
-        let query = ContentQuery { pattern: pattern.clone(), regex: self.regex, case_sensitive: self.case_sensitive, max_results: self.max_results };
+        let query = ContentQuery {
+            pattern: pattern.clone(),
+            regex: self.regex,
+            case_sensitive: self.case_sensitive,
+            max_results: self.max_results,
+        };
         if let Err(e) = content::build_matcher(&query) {
-            self.search = ContentSearch { query: pattern, error: Some(format!("{e}")), ..Default::default() };
+            self.search = ContentSearch {
+                query: pattern,
+                error: Some(format!("{e}")),
+                ..Default::default()
+            };
             self.search_rows.clear();
             cx.notify();
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
         self.search.cancel = Some(cancel.clone());
-        self.search_key = Some((pattern.clone(), self.regex, self.case_sensitive, self.search_scope.clone()));
+        self.search_key = Some((
+            pattern.clone(),
+            self.regex,
+            self.case_sensitive,
+            self.search_scope.clone(),
+        ));
         self.search_task = Some(cx.spawn(async move |this, cx| {
             if !delay.is_zero() {
                 cx.background_executor().timer(delay).await;
@@ -447,7 +485,12 @@ impl ExplorerPanel {
                 return;
             }
             let _ = this.update(cx, |e, cx| {
-                e.search = ContentSearch { query: pattern, running: true, cancel: Some(cancel.clone()), ..Default::default() };
+                e.search = ContentSearch {
+                    query: pattern,
+                    running: true,
+                    cancel: Some(cancel.clone()),
+                    ..Default::default()
+                };
                 e.search_rows.clear();
                 cx.notify();
             });
@@ -495,9 +538,16 @@ impl ExplorerPanel {
             if let Some(rel) = root.as_ref().and_then(|r| file.path.strip_prefix(r).ok()) {
                 file.rel_path = rel.to_string_lossy().replace('\\', "/");
             }
-            self.search_rows.push(SearchRow::File { path: file.path.clone(), rel: file.rel_path.clone(), count: file.lines.len() });
+            self.search_rows.push(SearchRow::File {
+                path: file.path.clone(),
+                rel: file.rel_path.clone(),
+                count: file.lines.len(),
+            });
             for line in &file.lines {
-                self.search_rows.push(SearchRow::Line { path: file.path.clone(), line: line.clone() });
+                self.search_rows.push(SearchRow::Line {
+                    path: file.path.clone(),
+                    line: line.clone(),
+                });
             }
             self.search.files.push(file);
         }
@@ -508,10 +558,14 @@ impl ExplorerPanel {
 
     fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let toggle = |id: &'static str, icon: IconName, on: bool, f: fn(&mut Self)| {
-            icon_button(id, icon, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                f(this);
-                this.schedule_search(Duration::ZERO, cx);
-            }))
+            icon_button(
+                id,
+                icon,
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    f(this);
+                    this.schedule_search(Duration::ZERO, cx);
+                }),
+            )
             .when(on, |el| el.bg(rgb(theme::surface1())).text_color(rgb(theme::accent())))
         };
         div()
@@ -521,7 +575,9 @@ impl ExplorerPanel {
             .gap_1()
             .p_2()
             .child(div().flex_1().child(Input::new(&self.query).cleanable(true)))
-            .child(toggle("case", IconName::CaseSensitive, self.case_sensitive, |e| e.case_sensitive = !e.case_sensitive))
+            .child(toggle("case", IconName::CaseSensitive, self.case_sensitive, |e| {
+                e.case_sensitive = !e.case_sensitive
+            }))
             .child(toggle("regex", IconName::Regex, self.regex, |e| e.regex = !e.regex))
     }
 
@@ -545,24 +601,48 @@ impl ExplorerPanel {
             .child(name.to_uppercase())
             .child(div().flex_1())
             .child(
-                icon_button("toggle-hidden", if self.opts.show_hidden { IconName::Eye } else { IconName::EyeOff }, cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.set_option(|o| { o.show_hidden = !o.show_hidden; o.respect_gitignore = !o.show_hidden; }, cx)
-                }))
-                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Show hidden & ignored files").build(w, cx)),
+                icon_button(
+                    "toggle-hidden",
+                    if self.opts.show_hidden {
+                        IconName::Eye
+                    } else {
+                        IconName::EyeOff
+                    },
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.set_option(
+                            |o| {
+                                o.show_hidden = !o.show_hidden;
+                                o.respect_gitignore = !o.show_hidden;
+                            },
+                            cx,
+                        )
+                    }),
+                )
+                .tooltip(|w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new("Show hidden & ignored files").build(w, cx)
+                }),
             )
             .child(
-                icon_button("collapse-all", IconName::ChevronsDownUp, cx.listener(|this, _: &ClickEvent, _, cx| {
-                    if let Some(root) = this.root.clone() {
-                        this.expanded.retain(|p| p == &root);
-                        this.rebuild_rows();
-                        cx.notify();
-                    }
-                }))
+                icon_button(
+                    "collapse-all",
+                    IconName::ChevronsDownUp,
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if let Some(root) = this.root.clone() {
+                            this.expanded.retain(|p| p == &root);
+                            this.rebuild_rows();
+                            cx.notify();
+                        }
+                    }),
+                )
                 .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Collapse all").build(w, cx)),
             )
             .child(
-                icon_button("refresh-tree", IconName::RefreshCw, cx.listener(|this, _: &ClickEvent, _, cx| this.set_option(|_| {}, cx)))
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Refresh").build(w, cx)),
+                icon_button(
+                    "refresh-tree",
+                    IconName::RefreshCw,
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.set_option(|_| {}, cx)),
+                )
+                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Refresh").build(w, cx)),
             )
     }
 
@@ -578,7 +658,11 @@ impl ExplorerPanel {
             None => theme::text(),
         };
         let icon = if entry.is_dir {
-            if expanded { IconName::FolderOpen } else { IconName::Folder }
+            if expanded {
+                IconName::FolderOpen
+            } else {
+                IconName::Folder
+            }
         } else {
             IconName::File
         };
@@ -612,15 +696,44 @@ impl ExplorerPanel {
                 cx.notify();
             }))
             .child(
-                div().w(px(12.)).flex_none().text_color(rgb(theme::overlay0())).when(is_dir, |el| {
-                    el.child(Icon::new(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }).size(px(11.)))
-                }),
+                div()
+                    .w(px(12.))
+                    .flex_none()
+                    .text_color(rgb(theme::overlay0()))
+                    .when(is_dir, |el| {
+                        el.child(
+                            Icon::new(if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(px(11.)),
+                        )
+                    }),
             )
-            .child(Icon::new(icon).size(px(14.)).text_color(rgb(if is_dir { theme::accent() } else { theme::subtext() })))
-            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(rgb(name_color)).child(entry.name.clone()))
+            .child(Icon::new(icon).size(px(14.)).text_color(rgb(if is_dir {
+                theme::accent()
+            } else {
+                theme::subtext()
+            })))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_color(rgb(name_color))
+                    .child(entry.name.clone()),
+            )
             .when(dirty_dir, |el| el.child(div().size(px(6.)).bg(rgb(theme::yellow()))))
             .when_some(status, |el, kind| {
-                el.child(div().text_color(rgb(theme::change_color(kind))).font_weight(FontWeight::BOLD).child(kind.letter().to_string()))
+                el.child(
+                    div()
+                        .text_color(rgb(theme::change_color(kind)))
+                        .font_weight(FontWeight::BOLD)
+                        .child(kind.letter().to_string()),
+                )
             })
             .child(
                 div()
@@ -628,25 +741,43 @@ impl ExplorerPanel {
                     .invisible()
                     .group_hover(group, |s| s.visible())
                     .child(
-                        icon_button(("insert", ix), IconName::SquareTerminal, cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::InsertPath(p1.clone()))))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Insert path in terminal").build(w, cx)),
+                        icon_button(
+                            ("insert", ix),
+                            IconName::SquareTerminal,
+                            cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::InsertPath(p1.clone()))),
+                        )
+                        .tooltip(|w, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new("Insert path in terminal").build(w, cx)
+                        }),
                     )
                     .when(is_dir, |el| {
                         el.child(
-                            icon_button(("cd", ix), IconName::CornerDownRight, cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Cd(p2.clone()))))
-                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("cd here in terminal").build(w, cx)),
+                            icon_button(
+                                ("cd", ix),
+                                IconName::CornerDownRight,
+                                cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Cd(p2.clone()))),
+                            )
+                            .tooltip(|w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("cd here in terminal").build(w, cx)
+                            }),
                         )
                     })
                     .child(
-                        icon_button(("copy", ix), IconName::Copy, cx.listener(move |_, _: &ClickEvent, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(p3.display().to_string()))
-                        }))
+                        icon_button(
+                            ("copy", ix),
+                            IconName::Copy,
+                            cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(p3.display().to_string()))
+                            }),
+                        )
                         .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Copy path").build(w, cx)),
                     )
                     .child({
                         let p4 = entry.path.clone();
-                        icon_button(("finder", ix), IconName::ExternalLink, move |_, _, _| reveal_in_finder(&p4))
-                            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Reveal in Finder").build(w, cx))
+                        icon_button(("finder", ix), IconName::ExternalLink, move |_, _, _| {
+                            reveal_in_finder(&p4)
+                        })
+                        .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Reveal in Finder").build(w, cx))
                     }),
             )
             .into_any_element()
@@ -657,18 +788,23 @@ impl ExplorerPanel {
             return empty_state("No folder: focus a terminal to browse its directory.").into_any_element();
         }
         if self.rows.is_empty() {
-            let msg = if self.loading.is_empty() { "Empty folder" } else { "Loading…" };
+            let msg = if self.loading.is_empty() {
+                "Empty folder"
+            } else {
+                "Loading…"
+            };
             return empty_state(msg).into_any_element();
         }
         uniform_list(
             "explorer-tree",
             self.rows.len(),
             cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                range.map(|ix| {
-                    let row = this.rows[ix].clone();
-                    this.render_tree_row(ix, &row, cx)
-                })
-                .collect::<Vec<_>>()
+                range
+                    .map(|ix| {
+                        let row = this.rows[ix].clone();
+                        this.render_tree_row(ix, &row, cx)
+                    })
+                    .collect::<Vec<_>>()
             }),
         )
         .track_scroll(&self.tree_scroll)
@@ -681,7 +817,11 @@ impl ExplorerPanel {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .child(canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {}).absolute().inset_0())
+                .child(
+                    canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {})
+                        .absolute()
+                        .inset_0(),
+                )
                 .child(list)
         })
         .into_any_element()
@@ -719,11 +859,17 @@ impl ExplorerPanel {
                 .flex_col()
                 .flex_1()
                 .min_h_0()
-                .child(canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {}).absolute().inset_0())
+                .child(
+                    canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {})
+                        .absolute()
+                        .inset_0(),
+                )
                 .child(list)
         });
         let scope_label = match (&self.search_scope, &self.root) {
-            (Some(scope), Some(root)) if scope != root => scope.strip_prefix(root).ok().map(|p| format!("{}/", p.display())),
+            (Some(scope), Some(root)) if scope != root => {
+                scope.strip_prefix(root).ok().map(|p| format!("{}/", p.display()))
+            }
             _ => None,
         };
         div()
@@ -741,19 +887,37 @@ impl ExplorerPanel {
                         .mx_2()
                         .mb_1()
                         .px_1()
-                        
                         .bg(rgb(theme::surface0()))
                         .text_xs()
-                        .child(Icon::new(IconName::Folder).size(px(12.)).text_color(rgb(theme::accent())))
+                        .child(
+                            Icon::new(IconName::Folder)
+                                .size(px(12.))
+                                .text_color(rgb(theme::accent())),
+                        )
                         .child(format!("in {label}"))
                         .child(div().flex_1())
-                        .child(icon_button("clear-scope", IconName::Close, cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.selected = None;
-                            this.schedule_search(Duration::ZERO, cx);
-                        }))),
+                        .child(icon_button(
+                            "clear-scope",
+                            IconName::Close,
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.selected = None;
+                                this.schedule_search(Duration::ZERO, cx);
+                            }),
+                        )),
                 )
             })
-            .child(div().px_2().pb_1().text_xs().text_color(rgb(if s.error.is_some() { theme::red() } else { theme::overlay0() })).child(status))
+            .child(
+                div()
+                    .px_2()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(rgb(if s.error.is_some() {
+                        theme::red()
+                    } else {
+                        theme::overlay0()
+                    }))
+                    .child(status),
+            )
             .child(list)
             .into_any_element()
     }
@@ -775,11 +939,37 @@ impl ExplorerPanel {
                     .text_xs()
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme::surface0())))
-                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::RevealInExplorer(p.clone()))))
-                    .child(Icon::new(IconName::File).size(px(13.)).text_color(rgb(theme::subtext())))
-                    .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(name.to_string()))
-                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_color(rgb(theme::overlay0())).child(dir.to_string()))
-                    .child(div().px_1().bg(rgb(theme::surface0())).text_color(rgb(theme::subtext())).child(count.to_string()))
+                    .on_click(
+                        cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::RevealInExplorer(p.clone()))),
+                    )
+                    .child(
+                        Icon::new(IconName::File)
+                            .size(px(13.))
+                            .text_color(rgb(theme::subtext())),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name.to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(rgb(theme::overlay0()))
+                            .child(dir.to_string()),
+                    )
+                    .child(
+                        div()
+                            .px_1()
+                            .bg(rgb(theme::surface0()))
+                            .text_color(rgb(theme::subtext()))
+                            .child(count.to_string()),
+                    )
                     .into_any_element()
             }
             SearchRow::Line { path, line } => {
@@ -808,10 +998,21 @@ impl ExplorerPanel {
                     .on_click({
                         let line_no = line.line_number as u32;
                         cx.listener(move |_, e: &ClickEvent, _, cx| {
-                            cx.emit(PanelEvent::OpenFile { path: p.clone(), line: Some(line_no), preview: e.click_count() < 2 })
+                            cx.emit(PanelEvent::OpenFile {
+                                path: p.clone(),
+                                line: Some(line_no),
+                                preview: e.click_count() < 2,
+                            })
                         })
                     })
-                    .child(div().flex_none().w(px(32.)).text_right().text_color(rgb(theme::overlay0())).child(line.line_number.to_string()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(32.))
+                            .text_right()
+                            .text_color(rgb(theme::overlay0()))
+                            .child(line.line_number.to_string()),
+                    )
                     .child(
                         div()
                             .flex_1()

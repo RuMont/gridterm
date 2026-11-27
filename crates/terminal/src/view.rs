@@ -1,9 +1,9 @@
 //! GPUI view that renders a terminal and forwards input to its PTY.
 
 use std::cell::Cell;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::Event as AlacEvent;
@@ -22,7 +22,18 @@ use crate::colors::{self, palette};
 use crate::keys::{self, KeyInput};
 use crate::links::{self, LinkTarget};
 
-gpui_kit::actions!(terminal, [Copy, Paste, Clear, ScrollPageUp, ScrollPageDown, ScrollToTop, ScrollToBottom]);
+gpui_kit::actions!(
+    terminal,
+    [
+        Copy,
+        Paste,
+        Clear,
+        ScrollPageUp,
+        ScrollPageDown,
+        ScrollToTop,
+        ScrollToBottom
+    ]
+);
 
 /// Key context used for terminal-specific key bindings.
 pub const KEY_CONTEXT: &str = "Terminal";
@@ -118,7 +129,12 @@ const SCROLLBAR_LINGER: Duration = Duration::from_millis(1500);
 
 /// Vertical extent of the scrollbar thumb in `track`, for a history of
 /// `history` lines of which the view is `display_offset` above the bottom.
-fn scrollbar_thumb(track: Bounds<Pixels>, line_height: f32, history: usize, display_offset: usize) -> Option<(f32, f32)> {
+fn scrollbar_thumb(
+    track: Bounds<Pixels>,
+    line_height: f32,
+    history: usize,
+    display_offset: usize,
+) -> Option<(f32, f32)> {
     if history == 0 {
         return None;
     }
@@ -221,7 +237,12 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         // Provisional size; the first paint resizes to the real bounds.
-        let size = GridSize { cols: 80, rows: 24, cell_width: 8.0, cell_height: 16.0 };
+        let size = GridSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 8.0,
+            cell_height: 16.0,
+        };
         let (term, listener, mut events) =
             backend::new_term_with(size, backend::term_config(settings.scrollback, settings.cursor_blink));
 
@@ -343,7 +364,10 @@ impl TerminalView {
 
     /// Header label: OSC title, else foreground process, else "shell".
     pub fn label(&self) -> String {
-        self.title.clone().or_else(|| self.process.clone()).unwrap_or_else(|| "shell".into())
+        self.title
+            .clone()
+            .or_else(|| self.process.clone())
+            .unwrap_or_else(|| "shell".into())
     }
 
     pub fn is_zoomed(&self) -> bool {
@@ -402,7 +426,10 @@ impl TerminalView {
     pub fn cursor_point(&self) -> (usize, usize) {
         let term = self.term.lock();
         let p = term.grid().cursor.point;
-        ((p.line.0 + term.grid().display_offset() as i32).max(0) as usize, p.column.0)
+        (
+            (p.line.0 + term.grid().display_offset() as i32).max(0) as usize,
+            p.column.0,
+        )
     }
 
     pub fn marked_text(&self) -> Option<&str> {
@@ -463,7 +490,10 @@ impl TerminalView {
         let geo = self.geometry.get();
         let m = geo.metrics?;
         let b = geo.bounds;
-        let track = Bounds::new(point(b.right() - px(SCROLLBAR_TRACK), b.top()), gpui_kit::size(px(SCROLLBAR_TRACK), b.size.height));
+        let track = Bounds::new(
+            point(b.right() - px(SCROLLBAR_TRACK), b.top()),
+            gpui_kit::size(px(SCROLLBAR_TRACK), b.size.height),
+        );
         let (history, offset) = {
             let term = self.term.lock();
             (term.grid().history_size(), term.grid().display_offset())
@@ -474,9 +504,15 @@ impl TerminalView {
 
     /// Scrolls so the thumb's top sits at `y` (window coordinates).
     fn scroll_to_thumb_top(&mut self, y: f32, cx: &mut Context<Self>) {
-        let Some((track, _, len)) = self.scrollbar_layout() else { return };
+        let Some((track, _, len)) = self.scrollbar_layout() else {
+            return;
+        };
         let room = f32::from(track.size.height) - len;
-        let fraction = if room > 0.0 { ((y - f32::from(track.top())) / room).clamp(0.0, 1.0) } else { 1.0 };
+        let fraction = if room > 0.0 {
+            ((y - f32::from(track.top())) / room).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         let mut term = self.term.lock();
         let history = term.grid().history_size();
         let above = (fraction * history as f32).round() as usize;
@@ -492,7 +528,9 @@ impl TerminalView {
     fn mark_scrolled(&mut self, cx: &mut Context<Self>) {
         self.scrolled_at = Some(Instant::now());
         self.scrollbar_hide = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SCROLLBAR_LINGER + Duration::from_millis(50)).await;
+            cx.background_executor()
+                .timer(SCROLLBAR_LINGER + Duration::from_millis(50))
+                .await;
             let _ = this.update(cx, |_, cx| cx.notify());
         }));
         cx.notify();
@@ -504,7 +542,9 @@ impl TerminalView {
         if !self.scrollbar_shown() {
             return false;
         }
-        let Some((track, top, len)) = self.scrollbar_layout() else { return false };
+        let Some((track, top, len)) = self.scrollbar_layout() else {
+            return false;
+        };
         if !track.contains(&position) {
             return false;
         }
@@ -530,7 +570,11 @@ impl TerminalView {
         let offset = content.display_offset as i32;
         let mut lines: Vec<String> = vec![String::new(); term.grid().screen_lines()];
         for cell in content.display_iter {
-            if cell.cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            if cell
+                .cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
                 continue;
             }
             let row = (cell.point.line.0 + offset) as usize;
@@ -545,7 +589,13 @@ impl TerminalView {
     pub fn cell_center(&self, row: usize, col: usize) -> Option<Point<Pixels>> {
         let geo = self.geometry.get();
         let m = geo.metrics?;
-        Some(geo.origin + point(px((col as f32 + 0.5) * m.cell_width), px((row as f32 + 0.5) * m.line_height)))
+        Some(
+            geo.origin
+                + point(
+                    px((col as f32 + 0.5) * m.cell_width),
+                    px((row as f32 + 0.5) * m.line_height),
+                ),
+        )
     }
 
     /// Pid of the shell's process (the `login` wrapper on macOS).
@@ -614,7 +664,11 @@ impl TerminalView {
     /// tests, an agent's spinner; not the echo of typing). Cheap (one
     /// syscall, a second when the job changes); notifies only on change.
     pub fn refresh_activity(&mut self, cx: &mut Context<Self>) -> bool {
-        let pid = if self.exited { None } else { self.pty.as_ref().and_then(|p| p.foreground_pid()) };
+        let pid = if self.exited {
+            None
+        } else {
+            self.pty.as_ref().and_then(|p| p.foreground_pid())
+        };
         if pid != self.foreground.map(|(p, _)| p) {
             let program = pid.is_some_and(|p| crate::cwd::process_name(p).is_some_and(|n| !keys::is_shell(&n)));
             self.foreground = pid.map(|p| (p, program));
@@ -656,7 +710,9 @@ impl TerminalView {
     }
 
     pub fn set_settings(&mut self, settings: TerminalSettings, cx: &mut Context<Self>) {
-        self.term.lock().set_options(backend::term_config(settings.scrollback, settings.cursor_blink));
+        self.term
+            .lock()
+            .set_options(backend::term_config(settings.scrollback, settings.cursor_blink));
         self.blink_visible = true;
         self.settings = settings;
         self.geometry.set(PaintedGeometry::default());
@@ -799,7 +855,11 @@ impl TerminalView {
             }
             if !self.first_output {
                 self.first_output = true;
-                log::info!("terminal {}: first output after {:?}", self.id, self.created_at.elapsed());
+                log::info!(
+                    "terminal {}: first output after {:?}",
+                    self.id,
+                    self.created_at.elapsed()
+                );
             }
             cx.notify();
         }
@@ -901,7 +961,11 @@ impl TerminalView {
         let y = f32::from(position.y - geo.origin.y).max(0.0);
         let col = ((x / m.cell_width) as usize).min(self.size.cols.saturating_sub(1) as usize);
         let row = ((y / m.line_height) as usize).min(self.size.rows.saturating_sub(1) as usize);
-        let side = if x % m.cell_width > m.cell_width / 2.0 { Side::Right } else { Side::Left };
+        let side = if x % m.cell_width > m.cell_width / 2.0 {
+            Side::Right
+        } else {
+            Side::Left
+        };
         let offset = self.term.lock().grid().display_offset() as i32;
         Some((GridPoint::new(Line(row as i32 - offset), Column(col)), side))
     }
@@ -911,7 +975,10 @@ impl TerminalView {
     /// OSC 52; ⇧ still selects locally). Programs that only take clicks
     /// (`?1000h`) never see a drag, so a drag there selects text locally.
     fn reports_drags(&self) -> bool {
-        self.term.lock().mode().intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+        self.term
+            .lock()
+            .mode()
+            .intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
     }
 
     fn mouse_mode(&self, shift: bool) -> bool {
@@ -924,7 +991,9 @@ impl TerminalView {
     }
 
     fn send_mouse_report(&mut self, button: u8, pressed: bool, position: Point<Pixels>, mods: Modifiers) {
-        let Some((point, _)) = self.grid_point(position) else { return };
+        let Some((point, _)) = self.grid_point(position) else {
+            return;
+        };
         let offset = self.term.lock().grid().display_offset() as i32;
         let (col, line) = (point.column.0 + 1, (point.line.0 + offset) as usize + 1);
         let code = button + 4 * mods.shift as u8 + 8 * mods.alt as u8 + 16 * mods.control as u8;
@@ -963,7 +1032,10 @@ impl TerminalView {
                 end += 1;
             }
             let row = (point.line.0 + offset) as usize;
-            return Some(HoveredLink { segments: vec![(row, start..end)], target: LinkTarget::Url(link.uri().to_string()) });
+            return Some(HoveredLink {
+                segments: vec![(row, start..end)],
+                target: LinkTarget::Url(link.uri().to_string()),
+            });
         }
         // Logical line: rows joined while the previous row ends with WRAPLINE.
         let wraps = |l: Line| grid[l][last].flags.contains(Flags::WRAPLINE);
@@ -980,7 +1052,11 @@ impl TerminalView {
             let row = &grid[Line(l)];
             chars.extend((0..cols).map(|c| {
                 let cell = &row[Column(c)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) { ' ' } else { cell.c }
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    ' '
+                } else {
+                    cell.c
+                }
             }));
         }
         drop(term);
@@ -1007,7 +1083,11 @@ impl TerminalView {
     }
 
     fn on_modifiers_changed(&mut self, event: &ModifiersChangedEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let link = if event.modifiers.platform { self.last_mouse.and_then(|p| self.link_at(p)) } else { None };
+        let link = if event.modifiers.platform {
+            self.last_mouse.and_then(|p| self.link_at(p))
+        } else {
+            None
+        };
         self.set_hovered_link(link, cx);
     }
 
@@ -1038,7 +1118,9 @@ impl TerminalView {
             // Click-only reporting: the program got the click; a drag (or a
             // double/triple click) still selects, as in a plain shell.
         }
-        let Some((point, side)) = self.grid_point(event.position) else { return };
+        let Some((point, side)) = self.grid_point(event.position) else {
+            return;
+        };
         let ty = match event.click_count {
             2 => SelectionType::Semantic,
             3.. => SelectionType::Lines,
@@ -1064,7 +1146,11 @@ impl TerminalView {
             }
             self.thumb_grab = None;
         }
-        let link = if event.modifiers.platform && event.pressed_button.is_none() { self.link_at(event.position) } else { None };
+        let link = if event.modifiers.platform && event.pressed_button.is_none() {
+            self.link_at(event.position)
+        } else {
+            None
+        };
         self.set_hovered_link(link, cx);
         if !self.selecting && self.mouse_mode(event.modifiers.shift) && self.reports_drags() {
             self.report_motion(event);
@@ -1159,7 +1245,11 @@ impl TerminalView {
         let label = self.label();
         let cwd = self.cwd.as_deref().map(backend::display_path).unwrap_or_default();
         let p = palette();
-        let (fg, bg) = if self.active { (rgb(p.on_accent), rgb(p.accent)) } else { (rgb(p.subtext), rgb(p.header_bg)) };
+        let (fg, bg) = if self.active {
+            (rgb(p.on_accent), rgb(p.accent))
+        } else {
+            (rgb(p.subtext), rgb(p.header_bg))
+        };
         div()
             .id("terminal-header")
             .flex()
@@ -1172,15 +1262,32 @@ impl TerminalView {
             .text_color(fg)
             .text_xs()
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| window.focus(&this.focus_handle, cx)))
-            .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(format!("{}", self.id)))
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("{}", self.id)),
+            )
             .child(div().flex_none().child(label))
-            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().opacity(0.75).child(cwd))
-            .child(header_button("zoom", if self.zoomed { "⤡" } else { "⤢" }, cx.listener(|_, _: &ClickEvent, _, cx| {
-                cx.emit(TerminalViewEvent::ToggleZoom)
-            })))
-            .child(header_button("close", "✕", cx.listener(|_, _: &ClickEvent, _, cx| {
-                cx.emit(TerminalViewEvent::CloseRequested)
-            })))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .opacity(0.75)
+                    .child(cwd),
+            )
+            .child(header_button(
+                "zoom",
+                if self.zoomed { "⤡" } else { "⤢" },
+                cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(TerminalViewEvent::ToggleZoom)),
+            ))
+            .child(header_button(
+                "close",
+                "✕",
+                cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(TerminalViewEvent::CloseRequested)),
+            ))
     }
 
     fn render_grid(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1195,14 +1302,21 @@ impl TerminalView {
         let cursor_visible = self.blink_visible || !focused;
         let hovered = self.hovered_link.clone();
         let marked = self.marked_text.clone();
-        let scrollbar = self.scrollbar_shown().then(|| self.scrollbar_layout()).flatten().map(|(track, top, len)| {
-            let hot = self.thumb_grab.is_some() || self.near_scrollbar;
-            let width = if hot { SCROLLBAR_THUMB_HOT } else { SCROLLBAR_THUMB };
-            let x = track.right() - px(SCROLLBAR_INSET + width);
-            let mut color: Hsla = rgb(palette().foreground).into();
-            color.a = if hot { 0.55 } else { 0.35 };
-            (Bounds::new(point(x, px(top)), gpui_kit::size(px(width), px(len))), color)
-        });
+        let scrollbar = self
+            .scrollbar_shown()
+            .then(|| self.scrollbar_layout())
+            .flatten()
+            .map(|(track, top, len)| {
+                let hot = self.thumb_grab.is_some() || self.near_scrollbar;
+                let width = if hot { SCROLLBAR_THUMB_HOT } else { SCROLLBAR_THUMB };
+                let x = track.right() - px(SCROLLBAR_INSET + width);
+                let mut color: Hsla = rgb(palette().foreground).into();
+                color.a = if hot { 0.55 } else { 0.35 };
+                (
+                    Bounds::new(point(x, px(top)), gpui_kit::size(px(width), px(len))),
+                    color,
+                )
+            });
 
         canvas(
             move |bounds, window, cx| {
@@ -1211,11 +1325,21 @@ impl TerminalView {
                 let metrics = geometry.get().metrics.unwrap_or_else(|| {
                     let ts = window.text_system();
                     let font_id = ts.resolve_font(&font);
-                    let cell_width = ts.advance(font_id, font_size, 'm').map(|s| f32::from(s.width)).unwrap_or(8.0);
-                    Metrics { cell_width, line_height: (settings.font_size * settings.line_height).round() }
+                    let cell_width = ts
+                        .advance(font_id, font_size, 'm')
+                        .map(|s| f32::from(s.width))
+                        .unwrap_or(8.0);
+                    Metrics {
+                        cell_width,
+                        line_height: (settings.font_size * settings.line_height).round(),
+                    }
                 });
                 let origin = bounds.origin + point(px(PADDING), px(PADDING / 2.0));
-                geometry.set(PaintedGeometry { origin, metrics: Some(metrics), bounds });
+                geometry.set(PaintedGeometry {
+                    origin,
+                    metrics: Some(metrics),
+                    bounds,
+                });
 
                 let width = f32::from(bounds.size.width) - 2.0 * PADDING;
                 let height = f32::from(bounds.size.height) - PADDING;
@@ -1226,13 +1350,24 @@ impl TerminalView {
                     cell_height: metrics.line_height,
                 };
                 let _ = this.update(cx, |view, _| view.apply_size(size));
-                let mut plan = layout_grid(&term, origin, metrics, &font, font_size, focused && cursor_visible, focused, dim, window);
+                let mut plan = layout_grid(
+                    &term,
+                    origin,
+                    metrics,
+                    &font,
+                    font_size,
+                    focused && cursor_visible,
+                    focused,
+                    dim,
+                    window,
+                );
                 if let Some(link) = &hovered {
                     for (row, cols) in &link.segments {
                         let y = origin.y + px((*row as f32 + 1.0) * metrics.line_height - 1.0);
                         let x = origin.x + px(cols.start as f32 * metrics.cell_width);
                         let w = px(cols.len() as f32 * metrics.cell_width);
-                        plan.overlays.push((Bounds::new(point(x, y), gpui_kit::size(w, px(1.))), palette().accent));
+                        plan.overlays
+                            .push((Bounds::new(point(x, y), gpui_kit::size(w, px(1.))), palette().accent));
                     }
                 }
                 if let Some(text) = marked.filter(|t| !t.is_empty()) {
@@ -1243,7 +1378,11 @@ impl TerminalView {
                         font: font.clone(),
                         color: rgb(palette().foreground).into(),
                         background_color: Some(rgb(palette().background).into()),
-                        underline: Some(UnderlineStyle { thickness: px(1.), color: Some(rgb(palette().accent).into()), wavy: false }),
+                        underline: Some(UnderlineStyle {
+                            thickness: px(1.),
+                            color: Some(rgb(palette().accent).into()),
+                            wavy: false,
+                        }),
                         strikethrough: None,
                     };
                     let shaped = window.text_system().shape_line(text.into(), font_size, &[run], None);
@@ -1285,12 +1424,15 @@ impl TerminalView {
     }
 }
 
-fn header_button(id: &'static str, label: &'static str, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> impl IntoElement {
+fn header_button(
+    id: &'static str,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     div()
         .id(id)
         .flex_none()
         .px_1()
-        
         .cursor_pointer()
         .hover(|s| s.bg(rgba(0xffffff22)))
         .on_click(move |e, w, cx| {
@@ -1369,7 +1511,9 @@ fn layout_grid(
     // Text batch being accumulated: (line, start col, style, text).
     let mut batch: Option<(i32, usize, RunStyle, String)> = None;
     let flush = |batch: &mut Option<(i32, usize, RunStyle, String)>, plan: &mut PaintPlan| {
-        let Some((line, col, style, text)) = batch.take() else { return };
+        let Some((line, col, style, text)) = batch.take() else {
+            return;
+        };
         if text.trim_end().is_empty() && !style.underline && !style.strike {
             return;
         }
@@ -1389,10 +1533,19 @@ fn layout_grid(
             font,
             color,
             background_color: None,
-            underline: style.underline.then_some(UnderlineStyle { thickness: px(1.), color: None, wavy: false }),
-            strikethrough: style.strike.then_some(StrikethroughStyle { thickness: px(1.), color: None }),
+            underline: style.underline.then_some(UnderlineStyle {
+                thickness: px(1.),
+                color: None,
+                wavy: false,
+            }),
+            strikethrough: style.strike.then_some(StrikethroughStyle {
+                thickness: px(1.),
+                color: None,
+            }),
         };
-        let shaped = window.text_system().shape_line(text.into(), font_size, &[run], Some(px(m.cell_width)));
+        let shaped = window
+            .text_system()
+            .shape_line(text.into(), font_size, &[run], Some(px(m.cell_width)));
         plan.lines.push((cell_rect(line, col, 1).origin, shaped));
     };
 
@@ -1470,11 +1623,19 @@ fn layout_grid(
         match (focused, cursor.shape) {
             (true, CursorShape::Block) => plan.cursor_under = Some((rect, cursor_color, false)),
             (true, CursorShape::Beam) => {
-                plan.cursor_over = Some((Bounds::new(rect.origin, size(px(2.), rect.size.height)), cursor_color, false))
+                plan.cursor_over = Some((
+                    Bounds::new(rect.origin, size(px(2.), rect.size.height)),
+                    cursor_color,
+                    false,
+                ))
             }
             (true, CursorShape::Underline) => {
                 let y = rect.bottom() - px(2.);
-                plan.cursor_over = Some((Bounds::new(point(rect.origin.x, y), size(rect.size.width, px(2.))), cursor_color, false))
+                plan.cursor_over = Some((
+                    Bounds::new(point(rect.origin.x, y), size(rect.size.width, px(2.))),
+                    cursor_color,
+                    false,
+                ))
             }
             _ => plan.cursor_under = Some((rect, cursor_color, true)),
         }
@@ -1485,7 +1646,11 @@ fn layout_grid(
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_count += 1;
-        let border = if self.active { rgb(palette().accent) } else { rgb(palette().border) };
+        let border = if self.active {
+            rgb(palette().accent)
+        } else {
+            rgb(palette().border)
+        };
         div()
             .id(("terminal", self.id as usize))
             .key_context(KEY_CONTEXT)
@@ -1536,7 +1701,6 @@ impl Render for TerminalView {
                                 .bottom_2()
                                 .right_2()
                                 .px_2()
-                                
                                 .bg(rgb(0x313244))
                                 .text_xs()
                                 .text_color(rgb(0xa6adc8))
@@ -1599,11 +1763,17 @@ impl EntityInputHandler for TerminalView {
 
     fn selected_text_range(&mut self, _: bool, _: &mut Window, _: &mut Context<Self>) -> Option<UTF16Selection> {
         let len = self.marked_text.as_deref().map_or(0, |m| m.encode_utf16().count());
-        Some(UTF16Selection { range: len..len, reversed: false })
+        Some(UTF16Selection {
+            range: len..len,
+            reversed: false,
+        })
     }
 
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        self.marked_text.as_deref().filter(|m| !m.is_empty()).map(|m| 0..m.encode_utf16().count())
+        self.marked_text
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .map(|m| 0..m.encode_utf16().count())
     }
 
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -1663,7 +1833,11 @@ impl TerminalView {
         let cursor = term.grid().cursor.point;
         let row = cursor.line.0 + term.grid().display_offset() as i32;
         Some(Bounds::new(
-            geo.origin + point(px(cursor.column.0 as f32 * m.cell_width), px(row as f32 * m.line_height)),
+            geo.origin
+                + point(
+                    px(cursor.column.0 as f32 * m.cell_width),
+                    px(row as f32 * m.line_height),
+                ),
             size(px(m.cell_width), px(m.line_height)),
         ))
     }

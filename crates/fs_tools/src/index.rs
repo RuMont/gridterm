@@ -242,7 +242,9 @@ impl FileIndex {
                     }
                     None => {
                         let haystack = &item.matcher_columns[0];
-                        let score = pattern.indices(haystack.slice(..), &mut matcher, &mut indices).unwrap_or(0);
+                        let score = pattern
+                            .indices(haystack.slice(..), &mut matcher, &mut indices)
+                            .unwrap_or(0);
                         indices.sort_unstable();
                         indices.dedup();
                         let indices = match haystack {
@@ -252,7 +254,12 @@ impl FileIndex {
                         (score, indices)
                     }
                 };
-                SearchHit { rel_path: rel_path.to_owned(), abs_path: self.root.join(rel_path), indices, score }
+                SearchHit {
+                    rel_path: rel_path.to_owned(),
+                    abs_path: self.root.join(rel_path),
+                    indices,
+                    score,
+                }
             })
             .collect()
     }
@@ -315,25 +322,22 @@ impl FileIndex {
         watcher.watch(&self.root, RecursiveMode::Recursive)?;
 
         let shared = self.shared.clone();
-        thread::Builder::new()
-            .name("fs-index-watch".into())
-            .spawn(move || {
-                // Exits when the watcher (and with it `tx`) is dropped.
-                while rx.recv().is_ok() {
-                    let first = Instant::now();
-                    loop {
-                        let wait =
-                            WATCH_DEBOUNCE.min(WATCH_MAX_DELAY.saturating_sub(first.elapsed()));
-                        match rx.recv_timeout(wait) {
-                            Ok(()) if first.elapsed() < WATCH_MAX_DELAY => continue,
-                            Ok(()) | Err(RecvTimeoutError::Timeout) => break,
-                            Err(RecvTimeoutError::Disconnected) => return,
-                        }
+        thread::Builder::new().name("fs-index-watch".into()).spawn(move || {
+            // Exits when the watcher (and with it `tx`) is dropped.
+            while rx.recv().is_ok() {
+                let first = Instant::now();
+                loop {
+                    let wait = WATCH_DEBOUNCE.min(WATCH_MAX_DELAY.saturating_sub(first.elapsed()));
+                    match rx.recv_timeout(wait) {
+                        Ok(()) if first.elapsed() < WATCH_MAX_DELAY => continue,
+                        Ok(()) | Err(RecvTimeoutError::Timeout) => break,
+                        Err(RecvTimeoutError::Disconnected) => return,
                     }
-                    shared.needs_rescan.store(true, Ordering::Release);
-                    shared.notify();
                 }
-            })?;
+                shared.needs_rescan.store(true, Ordering::Release);
+                shared.notify();
+            }
+        })?;
         self.watcher = Some(watcher);
         Ok(())
     }
@@ -484,14 +488,8 @@ impl EventFilter {
             return false;
         }
         let is_dir = path.is_dir();
-        !self
-            .gitignore
-            .matched_path_or_any_parents(rel, is_dir)
-            .is_ignore()
-            && !self
-                .global
-                .matched_path_or_any_parents(rel, is_dir)
-                .is_ignore()
+        !self.gitignore.matched_path_or_any_parents(rel, is_dir).is_ignore()
+            && !self.global.matched_path_or_any_parents(rel, is_dir).is_ignore()
     }
 }
 

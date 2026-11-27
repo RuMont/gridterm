@@ -138,7 +138,10 @@ impl CellView {
 
     /// The terminal shown when no file is (the parent or a child).
     pub fn current_terminal(&self) -> &Entity<TerminalView> {
-        self.shown_terminal.checked_sub(1).and_then(|i| self.children.get(i)).unwrap_or(&self.terminal)
+        self.shown_terminal
+            .checked_sub(1)
+            .and_then(|i| self.children.get(i))
+            .unwrap_or(&self.terminal)
     }
 
     /// The parent and the child terminals.
@@ -190,7 +193,9 @@ impl CellView {
     }
 
     fn close_child(&mut self, view: &Entity<TerminalView>, cx: &mut Context<Self>) {
-        let Some(i) = self.children.iter().position(|c| c == view) else { return };
+        let Some(i) = self.children.iter().position(|c| c == view) else {
+            return;
+        };
         // Dropping the view hangs up its shell.
         self.children.remove(i);
         let shown = self.shown_terminal;
@@ -229,7 +234,14 @@ impl CellView {
 
     /// Opens `path` as a tab (or shows its existing tab) and makes it visible.
     /// A preview replaces the current preview tab; a non-preview open pins it.
-    pub fn open_file(&mut self, path: &Path, line: Option<u32>, preview: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_file(
+        &mut self,
+        path: &Path,
+        line: Option<u32>,
+        preview: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let index = if let Some(i) = self.tabs.iter().position(|t| t.viewer.read(cx).path() == path) {
             if !preview {
                 self.tabs[i].preview = false;
@@ -255,11 +267,20 @@ impl CellView {
         self.show(Some(index), cx);
     }
 
-    fn new_viewer(&mut self, path: PathBuf, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) -> Entity<FileViewer> {
+    fn new_viewer(
+        &mut self,
+        path: PathBuf,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<FileViewer> {
         let viewer = cx.new(|cx| FileViewer::new(path, line, window, cx));
         let sub = cx.subscribe(&viewer, |this, viewer, event: &ViewerEvent, cx| match event {
             ViewerEvent::Focused => cx.emit(CellEvent::Focused),
-            ViewerEvent::OpenDefinition { path, line } => cx.emit(CellEvent::OpenFile { path: path.clone(), line: *line }),
+            ViewerEvent::OpenDefinition { path, line } => cx.emit(CellEvent::OpenFile {
+                path: path.clone(),
+                line: *line,
+            }),
             ViewerEvent::SelectionChanged => {
                 if this.last_viewed.as_ref() == Some(&viewer) {
                     this.view_task = Some(cx.spawn(async move |this, cx| {
@@ -304,7 +325,10 @@ impl CellView {
         let t = self.terminal.read(cx);
         let cwd = t.cwd().cloned();
         let repo_root = cwd.as_deref().and_then(crate::workspace::find_repo_root);
-        let viewing = self.last_viewed.as_ref().map(|v| v.read(cx).path().display().to_string());
+        let viewing = self
+            .last_viewed
+            .as_ref()
+            .map(|v| v.read(cx).path().display().to_string());
         serde_json::json!({
             "terminal": t.id(),
             "cwd": cwd.as_ref().map(|p| p.display().to_string()),
@@ -400,19 +424,26 @@ impl CellView {
             Activity::Running => 1,
             Activity::Working => 2,
         };
-        std::iter::once(self.snapshot.activity).chain(self.children.iter().map(|c| c.read(cx).activity())).max_by_key(|a| rank(*a)).unwrap_or_default()
+        std::iter::once(self.snapshot.activity)
+            .chain(self.children.iter().map(|c| c.read(cx).activity()))
+            .max_by_key(|a| rank(*a))
+            .unwrap_or_default()
     }
 
     /// Whether a terminal or one of the viewers holds focus.
     pub fn contains_focused(&self, window: &Window, cx: &App) -> bool {
-        self.terminals().any(|t| t.focus_handle(cx).contains_focused(window, cx))
+        self.terminals()
+            .any(|t| t.focus_handle(cx).contains_focused(window, cx))
             || self.tabs.iter().any(|t| t.viewer.read(cx).contains_focused(window, cx))
     }
 
     /// Pinned tabs (saved in the session) and which of them is visible.
     pub fn session_files(&self, cx: &App) -> (Vec<PathBuf>, Option<usize>) {
         let pinned: Vec<usize> = (0..self.tabs.len()).filter(|i| !self.tabs[*i].preview).collect();
-        let files = pinned.iter().map(|i| self.tabs[*i].viewer.read(cx).path().to_path_buf()).collect();
+        let files = pinned
+            .iter()
+            .map(|i| self.tabs[*i].viewer.read(cx).path().to_path_buf())
+            .collect();
         let visible = self.visible.and_then(|v| pinned.iter().position(|i| *i == v));
         (files, visible)
     }
@@ -450,7 +481,12 @@ impl CellView {
                 this.show_terminal(0, cx);
                 window.focus(&this.terminal.focus_handle(cx), cx);
             }))
-            .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(format!("{id}")))
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("{id}")),
+            )
             .when(s.activity != Activity::Idle, |el| el.child(busy_dot(id, s.activity)))
             // Next to the number so it survives the tab shrinking.
             .when(self.activity && !terminal_visible, |el| {
@@ -462,11 +498,23 @@ impl CellView {
                         .flex_none()
                         .size(px(6.))
                         .bg(rgb(p.accent))
-                        .child(canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {}).absolute().inset_0()),
+                        .child(
+                            canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {})
+                                .absolute()
+                                .inset_0(),
+                        ),
                 )
             })
             .child(div().flex_none().child(s.label.clone()))
-            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().opacity(0.75).child(cwd));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .opacity(0.75)
+                    .child(cwd),
+            );
 
         let child_tabs = self.children.iter().enumerate().map(|(i, child)| {
             let visible = self.visible.is_none() && self.shown_terminal == i + 1;
@@ -495,14 +543,33 @@ impl CellView {
                     this.show_terminal(i + 1, cx);
                     this.focus(window, cx);
                 }))
-                .child(div().flex_none().font_weight(FontWeight::SEMIBOLD).child(format!("{}", t.id())))
-                .when(t.activity() != Activity::Idle, |el| el.child(busy_dot(t.id(), t.activity())))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(format!("{}", t.id())),
+                )
+                .when(t.activity() != Activity::Idle, |el| {
+                    el.child(busy_dot(t.id(), t.activity()))
+                })
                 .child(div().flex_none().child(t.label()))
-                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().opacity(0.75).child(cwd))
-                .child(tab_button(("tab-child-close", i), "✕", cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.close_child(&child, cx);
-                })))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .opacity(0.75)
+                        .child(cwd),
+                )
+                .child(tab_button(
+                    ("tab-child-close", i),
+                    "✕",
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.close_child(&child, cx);
+                    }),
+                ))
         });
 
         let file_tabs = self.tabs.iter().enumerate().map(|(i, tab)| {
@@ -542,11 +609,22 @@ impl CellView {
                     this.show(Some(i), cx);
                     this.focus(window, cx);
                 }))
-                .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(name))
-                .child(tab_button(("tab-close", i), "✕", cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.close_tab(i, cx);
-                })))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(name),
+                )
+                .child(tab_button(
+                    ("tab-close", i),
+                    "✕",
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.close_tab(i, cx);
+                    }),
+                ))
         });
 
         let terminal = self.terminal.clone();
@@ -594,9 +672,11 @@ impl CellView {
                     .items_center()
                     .pr_1()
                     .text_color(rgb(p.subtext))
-                    .child(tab_button("zoom", if s.zoomed { "⤡" } else { "⤢" }, move |_, _, cx| {
-                        terminal.update(cx, |_, cx| cx.emit(TerminalViewEvent::ToggleZoom))
-                    }))
+                    .child(tab_button(
+                        "zoom",
+                        if s.zoomed { "⤡" } else { "⤢" },
+                        move |_, _, cx| terminal.update(cx, |_, cx| cx.emit(TerminalViewEvent::ToggleZoom)),
+                    ))
                     .child(tab_button("close", "✕", move |_, _, cx| {
                         terminal2.update(cx, |_, cx| cx.emit(TerminalViewEvent::CloseRequested))
                     })),
@@ -617,17 +697,29 @@ pub fn focus_cell(cell: &Entity<CellView>, window: &mut Window, cx: &mut App) {
 }
 
 fn snapshot_of(t: &TerminalView) -> TerminalSnapshot {
-    TerminalSnapshot { label: t.label(), cwd: t.cwd().cloned(), active: t.is_active(), zoomed: t.is_zoomed(), activity: t.activity() }
+    TerminalSnapshot {
+        label: t.label(),
+        cwd: t.cwd().cloned(),
+        active: t.is_active(),
+        zoomed: t.is_zoomed(),
+        activity: t.activity(),
+    }
 }
 
 /// A dot next to the number of a terminal running a command: it pulses
 /// while the command works (prints).
 fn busy_dot(id: u64, activity: Activity) -> AnyElement {
-    let dot = div().id(("busy", id as usize)).flex_none().size(px(7.)).bg(rgb(crate::theme::peach()));
+    let dot = div()
+        .id(("busy", id as usize))
+        .flex_none()
+        .size(px(7.))
+        .bg(rgb(crate::theme::peach()));
     if activity == Activity::Working {
         dot.with_animation(
             ("busy-pulse", id as usize),
-            Animation::new(std::time::Duration::from_millis(1400)).repeat().with_easing(pulsating_between(0.3, 1.0)),
+            Animation::new(std::time::Duration::from_millis(1400))
+                .repeat()
+                .with_easing(pulsating_between(0.3, 1.0)),
             |el, delta| el.opacity(delta),
         )
         .into_any_element()
@@ -636,7 +728,11 @@ fn busy_dot(id: u64, activity: Activity) -> AnyElement {
     }
 }
 
-fn tab_button(id: impl Into<ElementId>, label: &'static str, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> impl IntoElement {
+fn tab_button(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     div()
         .id(id)
         .flex_none()
@@ -652,14 +748,20 @@ impl Render for CellView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_count += 1;
         let p = palette();
-        let border = if self.snapshot.active { rgb(p.accent) } else { rgb(p.border) };
+        let border = if self.snapshot.active {
+            rgb(p.accent)
+        } else {
+            rgb(p.border)
+        };
         // A running command frames the cell in orange, drawn over it so the
         // terminal keeps its size (fainter when the cell is not active).
         let running = self.activity(cx) != Activity::Idle;
         let frame = rgba(crate::theme::peach() << 8 | if self.snapshot.active { 0xff } else { 0xa0 });
         let body = match self.visible_viewer() {
             Some(viewer) => viewer.clone().into_any_element(),
-            None => AnyView::from(self.current_terminal().clone()).cached(StyleRefinement::default().size_full()).into_any_element(),
+            None => AnyView::from(self.current_terminal().clone())
+                .cached(StyleRefinement::default().size_full())
+                .into_any_element(),
         };
         let (b, bb) = (self.bounds.clone(), self.body_bounds.clone());
         div()
@@ -672,25 +774,32 @@ impl Render for CellView {
             .border_1()
             .border_color(border)
             .bg(rgb(p.background))
-            .child(canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {}).absolute().inset_0())
+            .child(
+                canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            )
             .child(self.render_tab_bar(cx))
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(canvas(move |bounds, _, _| bb.set(bounds), |_, _, _, _| {}).absolute().inset_0())
+                    .child(
+                        canvas(move |bounds, _, _| bb.set(bounds), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0(),
+                    )
                     .child(body),
             )
             .when(running, |el| {
                 let paints = self.frame_paints.clone();
                 el.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .border_2()
-                        .border_color(frame)
-                        .child(canvas(|_, _, _| {}, move |_, _, _, _| paints.set(paints.get() + 1)).absolute().inset_0()),
+                    div().absolute().inset_0().border_2().border_color(frame).child(
+                        canvas(|_, _, _| {}, move |_, _, _, _| paints.set(paints.get() + 1))
+                            .absolute()
+                            .inset_0(),
+                    ),
                 )
             })
     }
@@ -703,7 +812,11 @@ fn git_branch(root: &Path) -> Option<String> {
     let git_dir = if dot_git.is_file() {
         let text = std::fs::read_to_string(&dot_git).ok()?;
         let dir = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
-        if dir.is_absolute() { dir } else { root.join(dir) }
+        if dir.is_absolute() {
+            dir
+        } else {
+            root.join(dir)
+        }
     } else {
         dot_git
     };

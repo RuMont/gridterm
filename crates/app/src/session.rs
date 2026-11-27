@@ -70,8 +70,15 @@ mod tests {
             row_weights: vec![1.0],
             col_weights: vec![vec![1.5, 0.5]],
             terminals: vec![
-                TerminalState { cwd: Some("/tmp".into()), files: vec!["/tmp/a.rs".into(), "/tmp/b.rs".into()], visible_tab: Some(1) },
-                TerminalState { cwd: None, ..Default::default() },
+                TerminalState {
+                    cwd: Some("/tmp".into()),
+                    files: vec!["/tmp/a.rs".into(), "/tmp/b.rs".into()],
+                    visible_tab: Some(1),
+                },
+                TerminalState {
+                    cwd: None,
+                    ..Default::default()
+                },
             ],
         };
         let text = toml::to_string_pretty(&s).unwrap();
@@ -83,6 +90,13 @@ mod tests {
     fn loads_sessions_without_file_tabs() {
         let text = "max_cols = 3\nmax_rows = 2\nactive = 0\nsidebar_width = 300.0\n\n[[terminals]]\ncwd = \"/tmp\"\n";
         let s: Session = toml::from_str(text).unwrap();
-        assert_eq!(s.terminals[0], TerminalState { cwd: Some("/tmp".into()), files: vec![], visible_tab: None });
+        assert_eq!(
+            s.terminals[0],
+            TerminalState {
+                cwd: Some("/tmp".into()),
+                files: vec![],
+                visible_tab: None
+            }
+        );
     }
 }

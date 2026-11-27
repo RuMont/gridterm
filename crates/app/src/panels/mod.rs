@@ -16,8 +16,15 @@ pub enum PanelEvent {
     RevealInExplorer(PathBuf),
     /// Open a file as a tab of the active terminal's cell (at a 1-based
     /// line). A preview replaces the cell's preview tab and keeps focus.
-    OpenFile { path: PathBuf, line: Option<u32>, preview: bool },
-    Notify { message: String, error: bool },
+    OpenFile {
+        path: PathBuf,
+        line: Option<u32>,
+        preview: bool,
+    },
+    Notify {
+        message: String,
+        error: bool,
+    },
     /// Show the git history in the floating window.
     OpenHistory,
     /// The repository's status changed (commit, stage, checkout…): open
@@ -30,11 +37,17 @@ pub enum PanelEvent {
 
 impl PanelEvent {
     pub fn info(message: impl Into<String>) -> Self {
-        Self::Notify { message: message.into(), error: false }
+        Self::Notify {
+            message: message.into(),
+            error: false,
+        }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        Self::Notify { message: message.into(), error: true }
+        Self::Notify {
+            message: message.into(),
+            error: true,
+        }
     }
 }
 

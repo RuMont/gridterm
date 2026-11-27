@@ -72,8 +72,7 @@ pub enum DiffSide {
 /// so the hunk spells out both sides in full.
 const FULL_CONTEXT: u32 = 1 << 30;
 
-const STALE_MESSAGE: &str =
-    "The file changed since the diff was shown. Refresh the diff and try again.";
+const STALE_MESSAGE: &str = "The file changed since the diff was shown. Refresh the diff and try again.";
 
 /// Modes of the two sides of a delta; `None` where the file does not exist.
 #[derive(Clone, Copy, Debug, Default)]
@@ -89,13 +88,7 @@ impl GitRepo {
     /// `path` is relative to the repository root. A file without changes on
     /// `side` yields a diff with no hunks. Files that are not valid UTF-8 are
     /// reported as binary.
-    pub fn diff_file(
-        &self,
-        path: &Path,
-        side: DiffSide,
-        context_lines: u32,
-        max_lines: usize,
-    ) -> Result<FileDiff> {
+    pub fn diff_file(&self, path: &Path, side: DiffSide, context_lines: u32, max_lines: usize) -> Result<FileDiff> {
         let path = self.relative(path);
         let (diff, _) = load(&self.repo()?, &path, side, context_lines, max_lines)?;
         Ok(diff)
@@ -138,10 +131,7 @@ impl GitRepo {
         side: DiffSide,
     ) -> Result<()> {
         if diff.binary {
-            bail!(
-                "{} is binary; stage the whole file instead",
-                diff.path.display()
-            );
+            bail!("{} is binary; stage the whole file instead", diff.path.display());
         }
         let hunk = diff.hunks.get(hunk_index).with_context(|| {
             format!(
@@ -165,9 +155,9 @@ impl GitRepo {
             Some(indices) => {
                 let mut selected = vec![false; hunk.lines.len()];
                 for &i in indices {
-                    *selected.get_mut(i).with_context(|| {
-                        format!("line {i} out of range (the hunk has {})", hunk.lines.len())
-                    })? = true;
+                    *selected
+                        .get_mut(i)
+                        .with_context(|| format!("line {i} out of range (the hunk has {})", hunk.lines.len()))? = true;
                 }
                 selected
             }
@@ -248,9 +238,10 @@ fn load(
         hunks: Vec::new(),
         truncated: false,
     };
-    let Some(idx) = diff.deltas().position(|delta| {
-        delta.new_file().path() == Some(path) || delta.old_file().path() == Some(path)
-    }) else {
+    let Some(idx) = diff
+        .deltas()
+        .position(|delta| delta.new_file().path() == Some(path) || delta.old_file().path() == Some(path))
+    else {
         return Ok((result, Sides::default()));
     };
 
@@ -262,10 +253,7 @@ fn load(
     };
 
     let patch = Patch::from_diff(&diff, idx)?;
-    let binary = delta.flags().is_binary()
-        || patch
-            .as_ref()
-            .is_some_and(|p| p.delta().flags().is_binary());
+    let binary = delta.flags().is_binary() || patch.as_ref().is_some_and(|p| p.delta().flags().is_binary());
     let Some(patch) = patch.filter(|_| !binary) else {
         result.binary = binary;
         return Ok((result, sides));
@@ -335,11 +323,7 @@ pub(crate) fn read_patch(patch: &Patch, result: &mut FileDiff, max_lines: usize,
 }
 
 /// The hunk's lines with their patch prefix after applying the selection.
-fn select_lines<'a>(
-    hunk: &'a Hunk,
-    selected: &[bool],
-    side: DiffSide,
-) -> Vec<(char, &'a DiffLine)> {
+fn select_lines<'a>(hunk: &'a Hunk, selected: &[bool], side: DiffSide) -> Vec<(char, &'a DiffLine)> {
     hunk.lines
         .iter()
         .zip(selected)
@@ -428,11 +412,7 @@ fn fixed_side_matches(hunk: &Hunk, full: &FileDiff, side: DiffSide) -> bool {
 /// other side (the unified-diff convention: a side with 0 lines starts at
 /// the line before the hunk).
 fn project_start(start: u32, count: u32, other_count: u32) -> u32 {
-    let before = if count == 0 {
-        start
-    } else {
-        start.saturating_sub(1)
-    };
+    let before = if count == 0 { start } else { start.saturating_sub(1) };
     if other_count == 0 {
         before
     } else {
@@ -440,25 +420,13 @@ fn project_start(start: u32, count: u32, other_count: u32) -> u32 {
     }
 }
 
-fn build_patch(
-    path: &Path,
-    hunk: &Hunk,
-    lines: &[(char, &DiffLine)],
-    side: DiffSide,
-    sides: Sides,
-) -> String {
+fn build_patch(path: &Path, hunk: &Hunk, lines: &[(char, &DiffLine)], side: DiffSide, sides: Sides) -> String {
     let old_lines = lines.iter().filter(|(p, _)| *p != '+').count() as u32;
     let new_lines = lines.iter().filter(|(p, _)| *p != '-').count() as u32;
     // The side `git apply` matches against keeps its position.
     let (old_start, new_start) = match side {
-        DiffSide::Unstaged => (
-            hunk.old_start,
-            project_start(hunk.old_start, old_lines, new_lines),
-        ),
-        DiffSide::Staged => (
-            project_start(hunk.new_start, new_lines, old_lines),
-            hunk.new_start,
-        ),
+        DiffSide::Unstaged => (hunk.old_start, project_start(hunk.old_start, old_lines, new_lines)),
+        DiffSide::Staged => (project_start(hunk.new_start, new_lines, old_lines), hunk.new_start),
     };
     let old_absent = sides.old.is_none() && old_lines == 0;
     let new_absent = sides.new.is_none() && new_lines == 0;
@@ -467,25 +435,17 @@ fn build_patch(
     let b = quote_path("b/", path);
     let mut out = format!("diff --git {a} {b}\n");
     if old_absent {
-        out.push_str(&format!(
-            "new file mode {:o}\n",
-            sides.new.unwrap_or(0o100644)
-        ));
+        out.push_str(&format!("new file mode {:o}\n", sides.new.unwrap_or(0o100644)));
     }
     if new_absent {
-        out.push_str(&format!(
-            "deleted file mode {:o}\n",
-            sides.old.unwrap_or(0o100644)
-        ));
+        out.push_str(&format!("deleted file mode {:o}\n", sides.old.unwrap_or(0o100644)));
     }
     out.push_str(&format!(
         "--- {}\n+++ {}\n",
         if old_absent { "/dev/null" } else { &a },
         if new_absent { "/dev/null" } else { &b },
     ));
-    out.push_str(&format!(
-        "@@ -{old_start},{old_lines} +{new_start},{new_lines} @@\n"
-    ));
+    out.push_str(&format!("@@ -{old_start},{old_lines} +{new_start},{new_lines} @@\n"));
     for (prefix, line) in lines {
         out.push(*prefix);
         out.push_str(&line.text);
@@ -504,9 +464,7 @@ fn quote_path(prefix: &str, path: &Path) -> String {
         .bytes()
         .chain(path.as_os_str().as_bytes().iter().copied())
         .collect();
-    let plain = bytes
-        .iter()
-        .all(|&b| b.is_ascii_graphic() && b != b'"' && b != b'\\');
+    let plain = bytes.iter().all(|&b| b.is_ascii_graphic() && b != b'"' && b != b'\\');
     if plain {
         return String::from_utf8(bytes).expect("ASCII");
     }
@@ -534,10 +492,7 @@ mod tests {
     fn quotes_special_paths() {
         assert_eq!(quote_path("a/", Path::new("src/x.rs")), "a/src/x.rs");
         assert_eq!(quote_path("a/", Path::new("my file")), "\"a/my file\"");
-        assert_eq!(
-            quote_path("b/", Path::new("é\"\\")),
-            "\"b/\\303\\251\\\"\\\\\""
-        );
+        assert_eq!(quote_path("b/", Path::new("é\"\\")), "\"b/\\303\\251\\\"\\\\\"");
     }
 
     #[test]

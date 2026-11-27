@@ -64,11 +64,19 @@ pub fn set_light(light: bool) {
 
 /// Palette currently in use.
 pub fn palette() -> &'static Palette {
-    if LIGHT_MODE.load(Ordering::Relaxed) { &LIGHT } else { &DARK }
+    if LIGHT_MODE.load(Ordering::Relaxed) {
+        &LIGHT
+    } else {
+        &DARK
+    }
 }
 
 fn rgb(c: u32) -> Rgb {
-    Rgb { r: (c >> 16) as u8, g: (c >> 8) as u8, b: c as u8 }
+    Rgb {
+        r: (c >> 16) as u8,
+        g: (c >> 8) as u8,
+        b: c as u8,
+    }
 }
 
 /// Colour of xterm-256 palette entry `i`.
@@ -81,7 +89,11 @@ pub fn indexed(i: u8, overrides: &Colors) -> Rgb {
         16..=231 => {
             let i = i - 16;
             let level = |v: u8| if v == 0 { 0 } else { v * 40 + 55 };
-            Rgb { r: level(i / 36), g: level((i / 6) % 6), b: level(i % 6) }
+            Rgb {
+                r: level(i / 36),
+                g: level((i / 6) % 6),
+                b: level(i % 6),
+            }
         }
         232..=255 => {
             let v = (i - 232) * 10 + 8;
@@ -122,7 +134,11 @@ pub fn named(n: NamedColor, overrides: &Colors, bold: bool) -> Rgb {
 }
 
 pub fn dim(c: Rgb) -> Rgb {
-    Rgb { r: (c.r as u16 * 2 / 3) as u8, g: (c.g as u16 * 2 / 3) as u8, b: (c.b as u16 * 2 / 3) as u8 }
+    Rgb {
+        r: (c.r as u16 * 2 / 3) as u8,
+        g: (c.g as u16 * 2 / 3) as u8,
+        b: (c.b as u16 * 2 / 3) as u8,
+    }
 }
 
 pub fn to_u32(c: Rgb) -> u32 {
@@ -147,7 +163,11 @@ mod tests {
         let lum = |c: u32| {
             let ch = |v: u32| {
                 let v = v as f64 / 255.0;
-                if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
             };
             0.2126 * ch(c >> 16 & 0xff) + 0.7152 * ch(c >> 8 & 0xff) + 0.0722 * ch(c & 0xff)
         };

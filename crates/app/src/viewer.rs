@@ -11,8 +11,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
 use fs_tools::watch::FileWatcher;
-use gpui_kit::assets::IconName;
 use git_client::{GitRepo, LineChange, LineChangeKind};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{
     DefinitionProvider, Editor, EditorState, GutterDecoration, GutterDecorationCollection, OverviewRulerDecoration,
     OverviewRulerDecorationCollection, OverviewRulerLane, Position, Rope, RopeExt as _,
@@ -46,7 +46,12 @@ fn stamp_of(path: &Path) -> Stamp {
 /// Outcome of reading a file for display.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Loaded {
-    Text { text: String, total_lines: usize, shown_lines: usize, truncated: bool },
+    Text {
+        text: String,
+        total_lines: usize,
+        shown_lines: usize,
+        truncated: bool,
+    },
     Binary,
     TooLarge(u64),
     Missing,
@@ -62,11 +67,19 @@ pub struct Limits {
     pub max_file_bytes: u64,
 }
 
-pub const LIMITS: Limits = Limits { max_lines: MAX_EDITOR_LINES, max_shown_bytes: MAX_EDITOR_BYTES, max_file_bytes: MAX_FILE_BYTES };
+pub const LIMITS: Limits = Limits {
+    max_lines: MAX_EDITOR_LINES,
+    max_shown_bytes: MAX_EDITOR_BYTES,
+    max_file_bytes: MAX_FILE_BYTES,
+};
 
 /// Reads `path` for display: binary sniffing, size cap and truncation.
 pub fn load_file(path: &Path, limits: Limits) -> Loaded {
-    let Limits { max_lines, max_shown_bytes, max_file_bytes: max_bytes } = limits;
+    let Limits {
+        max_lines,
+        max_shown_bytes,
+        max_file_bytes: max_bytes,
+    } = limits;
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Missing,
@@ -95,26 +108,47 @@ pub fn load_file(path: &Path, limits: Limits) -> Loaded {
     if cut > max_shown_bytes {
         // At the last line end within the byte budget (or mid-line if a
         // single line is longer than the budget).
-        cut = bytes[..max_shown_bytes].iter().rposition(|b| *b == b'\n').map_or(max_shown_bytes, |i| i + 1);
+        cut = bytes[..max_shown_bytes]
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(max_shown_bytes, |i| i + 1);
         while cut > 0 && cut < bytes.len() && (bytes[cut] & 0xC0) == 0x80 {
             cut -= 1; // don't split a UTF-8 sequence
         }
     }
     let truncated = cut < bytes.len();
-    let shown_lines = if truncated { bytecount_lines(&bytes[..cut]) } else { total_lines };
+    let shown_lines = if truncated {
+        bytecount_lines(&bytes[..cut])
+    } else {
+        total_lines
+    };
     let text = String::from_utf8_lossy(&bytes[..cut]).into_owned();
-    Loaded::Text { text, total_lines, shown_lines, truncated }
+    Loaded::Text {
+        text,
+        total_lines,
+        shown_lines,
+        truncated,
+    }
 }
 
 /// Number of lines as an editor shows them (a trailing newline does not start
 /// a new line; an empty file has one empty line).
 fn bytecount_lines(bytes: &[u8]) -> usize {
     let newlines = bytes.iter().filter(|b| **b == b'\n').count();
-    if bytes.last() == Some(&b'\n') || bytes.is_empty() { newlines.max(1) } else { newlines + 1 }
+    if bytes.last() == Some(&b'\n') || bytes.is_empty() {
+        newlines.max(1)
+    } else {
+        newlines + 1
+    }
 }
 
 fn memchr_nth_newline(bytes: &[u8], n: usize) -> Option<usize> {
-    bytes.iter().enumerate().filter(|(_, b)| **b == b'\n').nth(n.checked_sub(1)?).map(|(i, _)| i)
+    bytes
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| **b == b'\n')
+        .nth(n.checked_sub(1)?)
+        .map(|(i, _)| i)
 }
 
 /// Language token for the highlighter: the extension (syntect matches it
@@ -166,14 +200,25 @@ struct Definitions {
 }
 
 impl DefinitionProvider for Definitions {
-    fn definitions(&self, text: &Rope, offset: usize, _: &mut Window, cx: &mut App) -> Task<anyhow::Result<Vec<lsp_types::LocationLink>>> {
+    fn definitions(
+        &self,
+        text: &Rope,
+        offset: usize,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<Vec<lsp_types::LocationLink>>> {
         let path = self.path.clone();
         let content = text.to_string();
         let origin = crate::definition::word_at(&content, offset)
             .map(|r| lsp_types::Range::new(text.offset_to_position(r.start), text.offset_to_position(r.end)));
         cx.background_executor().spawn(async move {
-            let Some(target) = crate::definition::find(&path, &content, offset) else { return Ok(vec![]) };
-            let at = lsp_types::Range::new(lsp_types::Position::new(target.line, 0), lsp_types::Position::new(target.line, 0));
+            let Some(target) = crate::definition::find(&path, &content, offset) else {
+                return Ok(vec![]);
+            };
+            let at = lsp_types::Range::new(
+                lsp_types::Position::new(target.line, 0),
+                lsp_types::Position::new(target.line, 0),
+            );
             Ok(vec![lsp_types::LocationLink {
                 origin_selection_range: origin,
                 target_uri: crate::definition::file_uri(&target.path).parse()?,
@@ -228,13 +273,18 @@ impl FileViewer {
         let language = language_for(&path);
         let viewer = cx.weak_entity();
         let editor = cx.new(|cx| {
-            let mut e = EditorState::new(window, cx).language(language).soft_wrap(false).folding(false);
+            let mut e = EditorState::new(window, cx)
+                .language(language)
+                .soft_wrap(false)
+                .folding(false);
             e.set_readonly(true, cx);
             // Parse off the UI thread (the default parses ≤ 64 KB inline).
             e.set_highlighter_factory(crate::highlight::factory(), cx);
             e.lsp_mut().definition_provider = Some(Rc::new(Definitions { path: path.clone() }));
             e.lsp_mut().show_document = Some(Rc::new(move |params, _, cx| {
-                let Some(target) = crate::definition::path_from_uri(params.uri.as_str()) else { return false };
+                let Some(target) = crate::definition::path_from_uri(params.uri.as_str()) else {
+                    return false;
+                };
                 let line = params.selection.map_or(0, |r| r.start.line) + 1;
                 // The editor is being updated: open the tab once it is done.
                 let viewer = viewer.clone();
@@ -246,7 +296,8 @@ impl FileViewer {
             e
         });
         let focus_handle = cx.focus_handle();
-        cx.on_focus_in(&focus_handle, window, |_, _, cx| cx.emit(ViewerEvent::Focused)).detach();
+        cx.on_focus_in(&focus_handle, window, |_, _, cx| cx.emit(ViewerEvent::Focused))
+            .detach();
         // The editor notifies on any change; report only selection/cursor moves.
         cx.observe(&editor, |this: &mut Self, editor, cx| {
             let e = editor.read(cx);
@@ -268,7 +319,10 @@ impl FileViewer {
         let watch_task = cx.spawn_in(window, async move |this, cx| {
             use futures::StreamExt as _;
             while rx.next().await.is_some() {
-                if this.update_in(cx, |v, window, cx| v.reload_if_changed(window, cx)).is_err() {
+                if this
+                    .update_in(cx, |v, window, cx| v.reload_if_changed(window, cx))
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -429,7 +483,8 @@ impl FileViewer {
         let Some(line) = self.goto_line.take() else { return };
         let previous = window.focused(cx);
         let row = line.saturating_sub(1);
-        self.editor.update(cx, |e, cx| e.set_cursor_position(Position::new(row, 0), window, cx));
+        self.editor
+            .update(cx, |e, cx| e.set_cursor_position(Position::new(row, 0), window, cx));
         // `set_cursor_position` focuses the editor: give focus back (a preview
         // opened from the explorer keeps the explorer focused).
         if let Some(prev) = previous {
@@ -467,10 +522,22 @@ impl FileViewer {
         }));
     }
 
-    fn finish_load(&mut self, loaded: Loaded, stamp: Stamp, started: Instant, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_load(
+        &mut self,
+        loaded: Loaded,
+        stamp: Stamp,
+        started: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.stamp = stamp;
         self.state = match loaded {
-            Loaded::Text { text, total_lines, shown_lines, truncated } => {
+            Loaded::Text {
+                text,
+                total_lines,
+                shown_lines,
+                truncated,
+            } => {
                 self.total_lines = total_lines;
                 self.shown_lines = shown_lines;
                 self.truncated = truncated;
@@ -535,7 +602,13 @@ impl FileViewer {
             let text = self.editor.read(cx).text();
             let lines = text.lines_len();
             // Start of 0-based line `row`; the end of the text past the last.
-            let start = |row: usize| if row < lines { text.line_start_offset(row) } else { text.len() };
+            let start = |row: usize| {
+                if row < lines {
+                    text.line_start_offset(row)
+                } else {
+                    text.len()
+                }
+            };
             changes
                 .iter()
                 .filter(|c| (c.start as usize) <= lines + 1)
@@ -549,7 +622,9 @@ impl FileViewer {
                     let color: Hsla = rgb(color).into();
                     (
                         GutterDecoration::new(range.clone()).with_color(color),
-                        OverviewRulerDecoration::new(range).with_lane(OverviewRulerLane::Left).with_color(color),
+                        OverviewRulerDecoration::new(range)
+                            .with_lane(OverviewRulerLane::Left)
+                            .with_color(color),
                     )
                 })
                 .unzip()
@@ -564,7 +639,10 @@ impl FileViewer {
                 // The strip stays (empty) while the file is in a repository,
                 // so the text does not shift when the first change appears.
                 let marks = self.editor.update(cx, |e, cx| {
-                    (e.create_gutter_decorations_collection(gutter, cx), e.create_overview_ruler_decorations_collection(ruler, cx))
+                    (
+                        e.create_gutter_decorations_collection(gutter, cx),
+                        e.create_overview_ruler_decorations_collection(ruler, cx),
+                    )
                 });
                 self.git_marks = Some(marks);
             }
@@ -578,7 +656,11 @@ impl FileViewer {
             ViewerState::Binary => (IconName::File, "Binary file: not shown.".into()),
             ViewerState::TooLarge(n) => (
                 IconName::File,
-                format!("File too large to show ({:.1} MB, limit {} MB).", *n as f64 / 1_048_576.0, MAX_FILE_BYTES / 1_048_576),
+                format!(
+                    "File too large to show ({:.1} MB, limit {} MB).",
+                    *n as f64 / 1_048_576.0,
+                    MAX_FILE_BYTES / 1_048_576
+                ),
             ),
             ViewerState::Missing => (IconName::CircleX, "File deleted.".into()),
             ViewerState::Error(e) => (IconName::CircleX, format!("Cannot read file: {e}")),
@@ -598,9 +680,13 @@ impl FileViewer {
             .child(Icon::new(icon).size(px(28.)))
             .child(message)
             .when(!loading && self.state != ViewerState::Missing, |el| {
-                el.child(crate::ui::text_button("viewer-reveal", "Reveal in Finder", false, true, move |_, _, _| {
-                    crate::panels::reveal_in_finder(&path)
-                }))
+                el.child(crate::ui::text_button(
+                    "viewer-reveal",
+                    "Reveal in Finder",
+                    false,
+                    true,
+                    move |_, _, _| crate::panels::reveal_in_finder(&path),
+                ))
             })
             .id("viewer-notice")
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| window.focus(&this.focus_handle, cx)))
@@ -639,18 +725,25 @@ impl Render for FileViewer {
                             "Showing the first {} of {} lines (file truncated).",
                             self.shown_lines, self.total_lines
                         )))
-                        .child(crate::ui::text_button("viewer-open-external", "Open externally", false, true, move |_, _, _| {
-                            terminal::view::open_with(&[&path.display().to_string()])
-                        })),
+                        .child(crate::ui::text_button(
+                            "viewer-open-external",
+                            "Open externally",
+                            false,
+                            true,
+                            move |_, _, _| terminal::view::open_with(&[&path.display().to_string()]),
+                        )),
                 )
             })
             .map(|el| {
                 if text {
                     el.child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .child(Editor::new(&self.editor).readonly(true).bordered(false).appearance(false).h(relative(1.))),
+                        div().flex_1().min_h_0().child(
+                            Editor::new(&self.editor)
+                                .readonly(true)
+                                .bordered(false)
+                                .appearance(false)
+                                .h(relative(1.)),
+                        ),
                     )
                 } else {
                     el.child(self.render_notice(cx))
@@ -665,7 +758,11 @@ mod tests {
     use std::path::Path;
 
     fn lim(max_lines: usize, max_file_bytes: u64) -> Limits {
-        Limits { max_lines, max_shown_bytes: usize::MAX, max_file_bytes }
+        Limits {
+            max_lines,
+            max_shown_bytes: usize::MAX,
+            max_file_bytes,
+        }
     }
 
     #[test]
@@ -674,9 +771,18 @@ mod tests {
         let p = dir.path().join("w.txt");
         let line = format!("{}\n", "é".repeat(50)); // 101 bytes per line
         std::fs::write(&p, line.repeat(10)).unwrap();
-        let limits = Limits { max_lines: 100, max_shown_bytes: 350, max_file_bytes: u64::MAX };
+        let limits = Limits {
+            max_lines: 100,
+            max_shown_bytes: 350,
+            max_file_bytes: u64::MAX,
+        };
         match load_file(&p, limits) {
-            Loaded::Text { text, total_lines, shown_lines, truncated } => {
+            Loaded::Text {
+                text,
+                total_lines,
+                shown_lines,
+                truncated,
+            } => {
                 assert!(truncated);
                 assert_eq!((total_lines, shown_lines), (10, 3));
                 assert_eq!(text, line.repeat(3));
@@ -685,7 +791,11 @@ mod tests {
         }
         // One line longer than the budget: cut mid-line on a char boundary.
         std::fs::write(&p, "é".repeat(100)).unwrap();
-        let limits = Limits { max_lines: 100, max_shown_bytes: 51, max_file_bytes: u64::MAX };
+        let limits = Limits {
+            max_lines: 100,
+            max_shown_bytes: 51,
+            max_file_bytes: u64::MAX,
+        };
         match load_file(&p, limits) {
             Loaded::Text { text, truncated, .. } => {
                 assert!(truncated);
@@ -700,7 +810,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("a.rs");
         std::fs::write(&p, "fn main() {}\n").unwrap();
-        assert_eq!(load_file(&p, lim(10, 1000)), Loaded::Text { text: "fn main() {}\n".into(), total_lines: 1, shown_lines: 1, truncated: false });
+        assert_eq!(
+            load_file(&p, lim(10, 1000)),
+            Loaded::Text {
+                text: "fn main() {}\n".into(),
+                total_lines: 1,
+                shown_lines: 1,
+                truncated: false
+            }
+        );
 
         let bin = dir.path().join("b.bin");
         std::fs::write(&bin, [1u8, 2, 0, 3]).unwrap();
@@ -722,7 +840,12 @@ mod tests {
         let body: String = (1..=25).map(|i| format!("line {i}\n")).collect();
         std::fs::write(&p, &body).unwrap();
         match load_file(&p, lim(10, u64::MAX)) {
-            Loaded::Text { text, total_lines, shown_lines, truncated } => {
+            Loaded::Text {
+                text,
+                total_lines,
+                shown_lines,
+                truncated,
+            } => {
                 assert!(truncated);
                 assert_eq!((total_lines, shown_lines), (25, 10));
                 assert_eq!(text.lines().count(), 10);
@@ -732,7 +855,10 @@ mod tests {
         }
         // No trailing newline: last line still counted.
         std::fs::write(&p, "a\nb").unwrap();
-        assert!(matches!(load_file(&p, lim(10, u64::MAX)), Loaded::Text { total_lines: 2, .. }));
+        assert!(matches!(
+            load_file(&p, lim(10, u64::MAX)),
+            Loaded::Text { total_lines: 2, .. }
+        ));
         // Invalid UTF-8 is shown lossily, not as an error.
         std::fs::write(&p, [b'a', 0xff, b'\n']).unwrap();
         assert!(matches!(load_file(&p, lim(10, u64::MAX)), Loaded::Text { .. }));

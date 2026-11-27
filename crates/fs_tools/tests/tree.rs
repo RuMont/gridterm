@@ -42,12 +42,7 @@ fn show_hidden_marks_hidden_and_excludes_git() {
     assert!(n.contains(&".config") && n.contains(&".hidden_file"));
     assert!(!n.contains(&"target") && !n.contains(&"debug.log"));
     for e in &entries {
-        assert_eq!(
-            e.is_ignored_or_hidden,
-            e.name.starts_with('.'),
-            "{}",
-            e.name
-        );
+        assert_eq!(e.is_ignored_or_hidden, e.name.starts_with('.'), "{}", e.name);
     }
 }
 

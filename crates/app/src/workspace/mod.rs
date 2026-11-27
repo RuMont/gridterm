@@ -14,9 +14,7 @@ use terminal::{TerminalSettings, TerminalView, TerminalViewEvent};
 
 use crate::actions::*;
 use crate::cell::{CellEvent, CellView};
-use crate::panels::{
-    explorer::ExplorerPanel, git::GitPanel, search::SearchPanel, settings::SettingsPanel, PanelEvent,
-};
+use crate::panels::{explorer::ExplorerPanel, git::GitPanel, search::SearchPanel, settings::SettingsPanel, PanelEvent};
 use crate::theme;
 
 #[cfg(feature = "e2e")]
@@ -215,19 +213,22 @@ impl Workspace {
 
         // When the focused element disappears (e.g. switching sidebar panels),
         // fall back to the active terminal so shortcuts keep working.
-        subscriptions.push(cx.on_focus_lost(window, |this, window, cx| {
-            match this.active_cell().cloned() {
+        subscriptions.push(
+            cx.on_focus_lost(window, |this, window, cx| match this.active_cell().cloned() {
                 Some(cell) => crate::cell::focus_cell(&cell, window, cx),
                 None => window.focus(&this.focus_handle, cx),
-            }
-        }));
+            }),
+        );
 
         let poll = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(CWD_POLL).await;
-            if this.update(cx, |ws, cx| {
-                ws.poll_active_terminal(cx);
-                ws.poll_busy(cx);
-            }).is_err() {
+            if this
+                .update(cx, |ws, cx| {
+                    ws.poll_active_terminal(cx);
+                    ws.poll_busy(cx);
+                })
+                .is_err()
+            {
                 break;
             }
         });
@@ -345,7 +346,11 @@ impl Workspace {
                 .zip(&self.cells)
                 .map(|(t, cell)| {
                     let (files, visible_tab) = cell.read(cx).session_files(cx);
-                    crate::session::TerminalState { cwd: t.read(cx).cwd().cloned(), files, visible_tab }
+                    crate::session::TerminalState {
+                        cwd: t.read(cx).cwd().cloned(),
+                        files,
+                        visible_tab,
+                    }
                 })
                 .collect(),
         }
@@ -360,7 +365,10 @@ impl Workspace {
         }
         let capacity = self.grid_spec().capacity();
         for state in session.terminals.into_iter().take(capacity) {
-            let cwd = state.cwd.filter(|p| p.is_dir()).or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+            let cwd = state
+                .cwd
+                .filter(|p| p.is_dir())
+                .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
             let index = self.spawn_terminal(cwd, window, cx);
             let cell = self.cells[index].clone();
             cell.update(cx, |c, cx| {
@@ -368,15 +376,25 @@ impl Workspace {
                     c.open_file(file, None, false, window, cx);
                 }
                 // Saved index refers to the saved list; files may be gone.
-                let visible = state.visible_tab.and_then(|v| state.files.get(v)).and_then(|f| {
-                    c.tabs().iter().position(|t| t.viewer.read(cx).path() == f.as_path())
-                });
+                let visible = state
+                    .visible_tab
+                    .and_then(|v| state.files.get(v))
+                    .and_then(|f| c.tabs().iter().position(|t| t.viewer.read(cx).path() == f.as_path()));
                 c.show(visible, cx);
             });
         }
         let layout = slots(self.terminals.len(), self.grid_spec());
-        let weights = GridWeights { rows: session.row_weights, cols: session.col_weights };
-        if weights.matches(&layout) && weights.rows.iter().chain(weights.cols.iter().flatten()).all(|w| *w > 0.0) {
+        let weights = GridWeights {
+            rows: session.row_weights,
+            cols: session.col_weights,
+        };
+        if weights.matches(&layout)
+            && weights
+                .rows
+                .iter()
+                .chain(weights.cols.iter().flatten())
+                .all(|w| *w > 0.0)
+        {
             self.weights = weights;
         }
         let active = session.active.min(self.terminals.len().saturating_sub(1));
@@ -424,8 +442,16 @@ impl Workspace {
             env.push((agents::ide::PORT_ENV.to_string(), ide.port().to_string()));
         }
         if let (Some(socket), Some(files)) = (&self.agent_socket, &self.agent_files) {
-            env.push((agents::socket::SOCKET_ENV.to_string(), socket.path().display().to_string()));
-            let shell = self.config.terminal.shell.clone().unwrap_or_else(terminal::backend::user_shell);
+            env.push((
+                agents::socket::SOCKET_ENV.to_string(),
+                socket.path().display().to_string(),
+            ));
+            let shell = self
+                .config
+                .terminal
+                .shell
+                .clone()
+                .unwrap_or_else(terminal::backend::user_shell);
             env.extend(agents::integration::shell_env(files, &shell, |k| std::env::var(k).ok()));
         }
         env
@@ -444,7 +470,9 @@ impl Workspace {
         if !enabled {
             return;
         }
-        let Some(dir) = config::Config::dir().map(|d| d.join("agents")) else { return };
+        let Some(dir) = config::Config::dir().map(|d| d.join("agents")) else {
+            return;
+        };
         let exe = match std::env::current_exe() {
             Ok(exe) => exe,
             Err(e) => return log::warn!("agent MCP unavailable: no executable path: {e}"),
@@ -454,7 +482,9 @@ impl Workspace {
             Err(e) => return log::warn!("agent MCP unavailable: cannot write {}: {e:#}", dir.display()),
         };
         // GRIDTERM_SOCKET_DIR keeps tests apart from the user's instance.
-        let socket_dir = std::env::var_os("GRIDTERM_SOCKET_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let socket_dir = std::env::var_os("GRIDTERM_SOCKET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
         let path = agents::socket::socket_path(&socket_dir, std::process::id());
         agents::socket::remove_stale(&path);
         match agents::socket::AgentSocket::start(&path) {
@@ -509,7 +539,9 @@ impl Workspace {
             return;
         }
         // GRIDTERM_IDE_LOCK_DIR keeps tests out of ~/.claude/ide.
-        let dir = std::env::var_os("GRIDTERM_IDE_LOCK_DIR").map(PathBuf::from).or_else(agents::ide::default_lock_dir);
+        let dir = std::env::var_os("GRIDTERM_IDE_LOCK_DIR")
+            .map(PathBuf::from)
+            .or_else(agents::ide::default_lock_dir);
         let Some(dir) = dir else { return };
         match agents::ide::IdeServer::start(&dir, self.ide_folders(cx)) {
             Ok(mut server) => {
@@ -567,7 +599,9 @@ impl Workspace {
             agents::ide::IdeEvent::Anonymous { conn, peer_port } => {
                 // No token, no self-identification (opencode): ask the system
                 // which process in a cell holds the connection.
-                let Some(server_port) = self.ide.as_ref().map(|i| i.port()) else { return };
+                let Some(server_port) = self.ide.as_ref().map(|i| i.port()) else {
+                    return;
+                };
                 // (cell's parent id, shell) for every terminal of every cell.
                 let shells: Vec<(u64, i32)> = self
                     .cells
@@ -575,15 +609,24 @@ impl Workspace {
                     .zip(&self.terminals)
                     .flat_map(|(c, parent)| {
                         let id = parent.read(cx).id();
-                        c.read(cx).terminals().filter_map(|t| t.read(cx).child_pid()).map(move |p| (id, p)).collect::<Vec<_>>()
+                        c.read(cx)
+                            .terminals()
+                            .filter_map(|t| t.read(cx).child_pid())
+                            .map(move |p| (id, p))
+                            .collect::<Vec<_>>()
                     })
                     .collect();
                 let lookup = cx.background_spawn(async move {
-                    let trees: Vec<(u64, Vec<i32>)> =
-                        shells.into_iter().map(|(id, shell)| (id, terminal::cwd::descendants(shell))).collect();
+                    let trees: Vec<(u64, Vec<i32>)> = shells
+                        .into_iter()
+                        .map(|(id, shell)| (id, terminal::cwd::descendants(shell)))
+                        .collect();
                     let candidates: Vec<i32> = trees.iter().flat_map(|(_, t)| t.iter().copied()).collect();
                     let pid = agents::ide::tcp_client_pid(&candidates, peer_port, server_port)?;
-                    trees.into_iter().find(|(_, tree)| tree.contains(&pid)).map(|(id, _)| id)
+                    trees
+                        .into_iter()
+                        .find(|(_, tree)| tree.contains(&pid))
+                        .map(|(id, _)| id)
                 });
                 cx.spawn(async move |this, cx| {
                     if let Some(id) = lookup.await {
@@ -628,10 +671,14 @@ impl Workspace {
     /// Sends what terminal `id`'s cell shows to the agents running in it.
     fn push_agent_view(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(ide) = &self.ide else { return };
-        let Some(i) = self.terminals.iter().position(|t| t.read(cx).id() == id) else { return };
+        let Some(i) = self.terminals.iter().position(|t| t.read(cx).id() == id) else {
+            return;
+        };
         let view = self.cells[i].read(cx).agent_view(cx);
         for (conn, _) in self.ide_conns.iter().filter(|(_, t)| **t == id) {
-            if self.ide_sent.get(conn) != Some(&view) && ide.send(*conn, &agents::ide::Notification::SelectionChanged(view.clone())) {
+            if self.ide_sent.get(conn) != Some(&view)
+                && ide.send(*conn, &agents::ide::Notification::SelectionChanged(view.clone()))
+            {
                 self.ide_sent.insert(*conn, view.clone());
             }
         }
@@ -640,22 +687,40 @@ impl Workspace {
     /// ⌥⌘K in a viewer: inserts `@file#Lx-y` into the prompt of the agents
     /// running in that cell.
     fn send_to_agent(&mut self, _: &SendToAgent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(i) = self.cells.iter().position(|c| c.read(cx).contains_focused(window, cx)) else { return };
-        let Some(viewer) = self.cells[i].read(cx).visible_viewer().cloned() else { return };
+        let Some(i) = self.cells.iter().position(|c| c.read(cx).contains_focused(window, cx)) else {
+            return;
+        };
+        let Some(viewer) = self.cells[i].read(cx).visible_viewer().cloned() else {
+            return;
+        };
         let id = self.terminals[i].read(cx).id();
         let sel = viewer.read(cx).agent_selection(cx);
         let Some(file_path) = sel.file_path.clone() else { return };
         // A selection ending at the start of a line does not include it.
         let lines = (!sel.text.is_empty()).then(|| {
-            let end = if sel.end.1 == 0 && sel.end.0 > sel.start.0 { sel.end.0 - 1 } else { sel.end.0 };
+            let end = if sel.end.1 == 0 && sel.end.0 > sel.start.0 {
+                sel.end.0 - 1
+            } else {
+                sel.end.0
+            };
             (sel.start.0, end)
         });
-        let conns: Vec<_> = self.ide_conns.iter().filter(|(_, t)| **t == id).map(|(c, _)| *c).collect();
+        let conns: Vec<_> = self
+            .ide_conns
+            .iter()
+            .filter(|(_, t)| **t == id)
+            .map(|(c, _)| *c)
+            .collect();
         let Some(ide) = &self.ide else { return };
         let mention = agents::ide::Notification::AtMentioned { file_path, lines };
         let sent = conns.iter().filter(|c| ide.send(**c, &mention)).count();
         if sent == 0 {
-            self.notify_user("No Claude Code session is connected in this cell (run `claude` in its terminal).", false, window, cx);
+            self.notify_user(
+                "No Claude Code session is connected in this cell (run `claude` in its terminal).",
+                false,
+                window,
+                cx,
+            );
         } else {
             self.at_mentions_sent += sent as u32;
         }
@@ -672,7 +737,13 @@ impl Workspace {
 
     /// Shows a notification in the static stack (top-right, newest last).
     /// Info notices close after `NOTICE_TTL`; errors stay until dismissed.
-    fn notify_user(&mut self, message: impl Into<SharedString>, error: bool, _window: &mut Window, cx: &mut Context<Self>) {
+    fn notify_user(
+        &mut self,
+        message: impl Into<SharedString>,
+        error: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let message: SharedString = message.into();
         self.notices.push((message.to_string(), error));
         if self.notices.len() > 50 {
@@ -716,7 +787,11 @@ impl Workspace {
             .gap(px(TOAST_GAP))
             .children(self.toasts.iter().map(|t| {
                 let id = t.id;
-                let (accent, icon) = if t.error { (theme::red(), IconName::CircleX) } else { (theme::accent(), IconName::Info) };
+                let (accent, icon) = if t.error {
+                    (theme::red(), IconName::CircleX)
+                } else {
+                    (theme::accent(), IconName::Info)
+                };
                 let b = bounds.clone();
                 div()
                     .id(("toast", id as usize))
@@ -732,12 +807,18 @@ impl Workspace {
                     .border_color(rgb(accent))
                     .text_sm()
                     .text_color(rgb(theme::text()))
-                    .child(canvas(move |bounds, _, _| b.borrow_mut().push((id, bounds)), |_, _, _, _| {}).absolute().inset_0())
+                    .child(
+                        canvas(move |bounds, _, _| b.borrow_mut().push((id, bounds)), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0(),
+                    )
                     .child(Icon::new(icon).size(px(16.)).text_color(rgb(accent)))
                     .child(div().flex_1().min_w_0().child(t.message.clone()))
-                    .child(crate::ui::icon_button(("toast-close", id as usize), IconName::Close, cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.dismiss_toast(id, cx)
-                    })))
+                    .child(crate::ui::icon_button(
+                        ("toast-close", id as usize),
+                        IconName::Close,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_toast(id, cx)),
+                    ))
             }))
     }
 
@@ -755,7 +836,10 @@ impl Workspace {
             return false;
         }
         self.notify_user(
-            format!("Grid full ({}×{}). Increase columns/rows in Settings (⌘,).", spec.max_cols, spec.max_rows),
+            format!(
+                "Grid full ({}×{}). Increase columns/rows in Settings (⌘,).",
+                spec.max_cols, spec.max_rows
+            ),
             false,
             window,
             cx,
@@ -814,7 +898,8 @@ impl Workspace {
                     Ok(rx) => rx.await.ok(),
                     Err(_) => None,
                 };
-                this.update_in(cx, |ws, window, cx| ws.picker_answered(answer, window, cx)).ok();
+                this.update_in(cx, |ws, window, cx| ws.picker_answered(answer, window, cx))
+                    .ok();
             })
             .detach();
         }
@@ -853,7 +938,9 @@ impl Workspace {
             marks.push((name, lap.elapsed()));
             *lap = std::time::Instant::now();
         };
-        let cwd = cwd.filter(|d| d.is_dir()).or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+        let cwd = cwd
+            .filter(|d| d.is_dir())
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
         let index = self.spawn_terminal(cwd, window, cx);
         mark("spawn view", &mut lap);
         self.zoomed = false;
@@ -910,8 +997,18 @@ impl Workspace {
 
     /// Opens `path` as a tab of cell `index`. Pinned opens take focus; a
     /// preview leaves it where it is (e.g. in the explorer).
-    fn open_file_in(&mut self, index: usize, path: &std::path::Path, line: Option<u32>, preview: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(cell) = self.cells.get(index).cloned() else { return };
+    fn open_file_in(
+        &mut self,
+        index: usize,
+        path: &std::path::Path,
+        line: Option<u32>,
+        preview: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cell) = self.cells.get(index).cloned() else {
+            return;
+        };
         if self.zoomed && self.active != Some(index) {
             self.zoomed = false;
         }
@@ -926,19 +1023,31 @@ impl Workspace {
     }
 
     fn cycle_tab(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(cell) = self.active_cell().cloned() else { return };
+        let Some(cell) = self.active_cell().cloned() else {
+            return;
+        };
         cell.update(cx, |c, cx| c.cycle(forward, cx));
         crate::cell::focus_cell(&cell, window, cx);
     }
 
     fn show_terminal_tab(&mut self, _: &ShowTerminalTab, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(cell) = self.active_cell().cloned() else { return };
+        let Some(cell) = self.active_cell().cloned() else {
+            return;
+        };
         cell.update(cx, |c, cx| c.show(None, cx));
         crate::cell::focus_cell(&cell, window, cx);
     }
 
-    fn on_cell_event(&mut self, cell: &Entity<CellView>, event: &CellEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.cells.iter().position(|c| c == cell) else { return };
+    fn on_cell_event(
+        &mut self,
+        cell: &Entity<CellView>,
+        event: &CellEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.cells.iter().position(|c| c == cell) else {
+            return;
+        };
         match event {
             // A file viewer got focus: its cell (terminal) becomes active,
             // the tools keep following that terminal.
@@ -982,7 +1091,13 @@ impl Workspace {
 
     /// A child terminal in cell `index`, in `cwd` (default: the folder of
     /// the cell's current terminal).
-    fn new_terminal_in_cell_at(&mut self, index: usize, cwd: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<TerminalView>> {
+    fn new_terminal_in_cell_at(
+        &mut self,
+        index: usize,
+        cwd: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<TerminalView>> {
         let cell = self.cells.get(index).cloned()?;
         let cwd = match cwd {
             Some(dir) => Some(dir),
@@ -1021,7 +1136,12 @@ impl Workspace {
                 match external::classify(&path) {
                     Some(t) => t,
                     None => {
-                        self.notify_user(format!("Cannot open {}: it does not exist", path.display()), true, window, cx);
+                        self.notify_user(
+                            format!("Cannot open {}: it does not exist", path.display()),
+                            true,
+                            window,
+                            cx,
+                        );
                         continue;
                     }
                 }
@@ -1035,7 +1155,10 @@ impl Workspace {
                 }
                 Target::File(file) => {
                     if self.terminals.is_empty() {
-                        let dir = file.parent().map(std::path::Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/"));
+                        let dir = file
+                            .parent()
+                            .map(std::path::Path::to_path_buf)
+                            .unwrap_or_else(|| PathBuf::from("/"));
                         self.open_external_terminal(dir, None, window, cx);
                     }
                     if let Some(i) = self.active {
@@ -1050,7 +1173,13 @@ impl Workspace {
     /// A terminal asked for from outside: a new cell, or a tab of the active
     /// cell when the grid is full. `line` is typed into its shell, which
     /// stays open when it ends.
-    fn open_external_terminal(&mut self, dir: PathBuf, line: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<TerminalView>> {
+    fn open_external_terminal(
+        &mut self,
+        dir: PathBuf,
+        line: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<TerminalView>> {
         let view = if !self.grid_spec().is_full(self.terminals.len()) {
             self.open_terminal_in(Some(dir), window, cx);
             self.terminals.last().cloned()
@@ -1066,13 +1195,20 @@ impl Workspace {
 
     /// Every terminal: parents and the cells' child terminals.
     fn all_terminals(&self, cx: &App) -> Vec<Entity<TerminalView>> {
-        self.cells.iter().flat_map(|c| c.read(cx).terminals().cloned().collect::<Vec<_>>()).collect()
+        self.cells
+            .iter()
+            .flat_map(|c| c.read(cx).terminals().cloned().collect::<Vec<_>>())
+            .collect()
     }
 
     /// Cell whose shells (parent or children) `pid` descends from.
     fn cell_of_pid(&self, pid: i32, cx: &App) -> Option<usize> {
         self.cells.iter().position(|c| {
-            c.read(cx).terminals().any(|t| t.read(cx).child_pid().is_some_and(|shell| terminal::cwd::is_descendant(pid, shell)))
+            c.read(cx).terminals().any(|t| {
+                t.read(cx)
+                    .child_pid()
+                    .is_some_and(|shell| terminal::cwd::is_descendant(pid, shell))
+            })
         })
     }
 
@@ -1097,9 +1233,7 @@ impl Workspace {
                     self.set_active(index, window, cx);
                 }
             }
-            TerminalViewEvent::CloseRequested | TerminalViewEvent::Exited => {
-                self.close_terminal_at(index, window, cx)
-            }
+            TerminalViewEvent::CloseRequested | TerminalViewEvent::Exited => self.close_terminal_at(index, window, cx),
             TerminalViewEvent::ToggleZoom => {
                 self.set_active(index, window, cx);
                 self.toggle_zoom(&ToggleZoom, window, cx);
@@ -1114,7 +1248,14 @@ impl Workspace {
 
     /// ⌘click on a path in a terminal of cell `index`: a file opens as a tab
     /// of that cell, a folder is revealed in the explorer.
-    fn open_path(&mut self, index: usize, path: &std::path::Path, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_path(
+        &mut self,
+        index: usize,
+        path: &std::path::Path,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if path.is_file() {
             self.open_file_in(index, path, line, false, window, cx);
         } else {
@@ -1128,7 +1269,9 @@ impl Workspace {
 
     /// Makes terminal `index` the active one, focuses it and retargets the tools.
     fn set_active(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(view) = self.terminals.get(index).cloned() else { return };
+        let Some(view) = self.terminals.get(index).cloned() else {
+            return;
+        };
         if let Some(prev) = self.active.and_then(|i| self.terminals.get(i)).cloned() {
             if prev != view {
                 prev.update(cx, |t, cx| t.set_active(false, cx));
@@ -1184,7 +1327,13 @@ impl Workspace {
         self.sync_ide_folders(cx);
         let root_changed = root != self.context.root;
         let repo_changed = repo_root != self.context.repo_root;
-        self.context = ActiveContext { terminal_id: Some(id), cwd, repo_root: repo_root.clone(), root: root.clone(), pinned: false };
+        self.context = ActiveContext {
+            terminal_id: Some(id),
+            cwd,
+            repo_root: repo_root.clone(),
+            root: root.clone(),
+            pinned: false,
+        };
         if repo_changed {
             self.git.update(cx, |g, cx| g.set_repo(repo_root, cx));
         }
@@ -1288,7 +1437,10 @@ impl Workspace {
     /// ⌘⇧F: search in files, seeded with the active cell's selection (one
     /// line, as in VS Code) when there is one.
     fn show_content_search(&mut self, _: &ShowContentSearch, window: &mut Window, cx: &mut Context<Self>) {
-        let seed = self.active_cell().and_then(|c| c.read(cx).selected_text(cx)).and_then(|t| content_search_seed(&t));
+        let seed = self
+            .active_cell()
+            .and_then(|c| c.read(cx).selected_text(cx))
+            .and_then(|t| content_search_seed(&t));
         self.sidebar_visible = true;
         self.panel = Panel::Explorer;
         self.explorer.update(cx, |e, cx| match seed {
@@ -1341,29 +1493,60 @@ impl Workspace {
     /// What the history window says about where it is.
     pub(crate) fn history_location(&self, cx: &App) -> HistoryLocation {
         let cell = self.context.terminal_id.and_then(|terminal| {
-            let index = self.cells.iter().position(|c| c.read(cx).terminals().any(|t| t.read(cx).id() == terminal))?;
+            let index = self
+                .cells
+                .iter()
+                .position(|c| c.read(cx).terminals().any(|t| t.read(cx).id() == terminal))?;
             let layout = compute_layout(self.terminals.len(), self.grid_spec());
             let (row, col) = layout::position_of(&layout, index)?;
-            Some(CellPosition { index, row, col, terminal })
+            Some(CellPosition {
+                index,
+                row,
+                col,
+                terminal,
+            })
         });
-        HistoryLocation { repo: self.context.repo_root.clone(), branch: self.git.read(cx).branch_label(), cell }
+        HistoryLocation {
+            repo: self.context.repo_root.clone(),
+            branch: self.git.read(cx).branch_label(),
+            cell,
+        }
     }
 
     fn render_history_window(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let HistoryLocation { repo, branch, cell } = self.history_location(cx);
-        let path = repo.as_deref().map(|p| p.display().to_string()).unwrap_or_else(|| "No repository".into());
+        let path = repo
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "No repository".into());
         let layout = compute_layout(self.terminals.len(), self.grid_spec());
         let position = match cell {
-            Some(c) => format!("Cell {} · row {}, column {} · T{}", c.index + 1, c.row + 1, c.col + 1, c.terminal),
+            Some(c) => format!(
+                "Cell {} · row {}, column {} · T{}",
+                c.index + 1,
+                c.row + 1,
+                c.col + 1,
+                c.terminal
+            ),
             None => "No cell".into(),
         };
         // A small map of the grid with this cell lit.
-        let minimap = div().flex().flex_col().gap(px(2.)).flex_none().children(layout.iter().map(|r| {
-            div().flex().flex_row().gap(px(2.)).children(r.iter().map(|&i| {
-                let lit = cell.is_some_and(|c| c.index == i);
-                div().w(px(16.)).h(px(10.)).border_1().border_color(rgb(if lit { theme::accent() } else { theme::surface1() })).when(lit, |d| d.bg(rgb(theme::accent())))
-            }))
-        }));
+        let minimap = div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .flex_none()
+            .children(layout.iter().map(|r| {
+                div().flex().flex_row().gap(px(2.)).children(r.iter().map(|&i| {
+                    let lit = cell.is_some_and(|c| c.index == i);
+                    div()
+                        .w(px(16.))
+                        .h(px(10.))
+                        .border_1()
+                        .border_color(rgb(if lit { theme::accent() } else { theme::surface1() }))
+                        .when(lit, |d| d.bg(rgb(theme::accent())))
+                }))
+            }));
         div()
             .id("history-backdrop")
             .absolute()
@@ -1376,7 +1559,10 @@ impl Workspace {
             .items_center()
             .justify_center()
             .bg(rgba(theme::backdrop()))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, w, cx| this.close_history(w, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, w, cx| this.close_history(w, cx)),
+            )
             .child(
                 div()
                     .id("history-window")
@@ -1418,8 +1604,17 @@ impl Workspace {
                                             .items_center()
                                             .gap_2()
                                             .text_sm()
-                                            .child(Icon::new(IconName::GitBranch).size(px(14.)).text_color(rgb(theme::accent())))
-                                            .child(div().font_weight(FontWeight::SEMIBOLD).text_color(rgb(theme::text())).child("History"))
+                                            .child(
+                                                Icon::new(IconName::GitBranch)
+                                                    .size(px(14.))
+                                                    .text_color(rgb(theme::accent())),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(rgb(theme::text()))
+                                                    .child("History"),
+                                            )
                                             .when_some(branch, |el, b| {
                                                 el.child(
                                                     div()
@@ -1452,8 +1647,12 @@ impl Workspace {
                                     .child(div().text_xs().text_color(rgb(theme::subtext())).child(position)),
                             )
                             .child(
-                                crate::ui::icon_button("history-close", IconName::Close, cx.listener(|this, _: &ClickEvent, w, cx| this.close_history(w, cx)))
-                                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Close  Esc").build(w, cx)),
+                                crate::ui::icon_button(
+                                    "history-close",
+                                    IconName::Close,
+                                    cx.listener(|this, _: &ClickEvent, w, cx| this.close_history(w, cx)),
+                                )
+                                .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Close  Esc").build(w, cx)),
                             ),
                     )
                     .child(div().flex().flex_col().flex_1().min_h_0().child(self.git.clone())),
@@ -1461,7 +1660,12 @@ impl Workspace {
     }
 
     fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let location = self.context.root.as_deref().map(terminal::display_path).unwrap_or_default();
+        let location = self
+            .context
+            .root
+            .as_deref()
+            .map(terminal::display_path)
+            .unwrap_or_default();
         div()
             .id("palette-backdrop")
             .absolute()
@@ -1474,7 +1678,10 @@ impl Workspace {
             .items_center()
             .pt(px(72.))
             .bg(rgba(theme::backdrop()))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, w, cx| this.close_palette(w, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, w, cx| this.close_palette(w, cx)),
+            )
             .child(
                 div()
                     .id("palette")
@@ -1489,7 +1696,9 @@ impl Workspace {
                     .relative()
                     .child({
                         let b = self.palette_bounds.clone();
-                        canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {}).absolute().inset_0()
+                        canvas(move |bounds, _, _| b.set(bounds), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0()
                     })
                     .border_1()
                     .border_color(rgb(theme::surface1()))
@@ -1591,18 +1800,26 @@ impl Workspace {
 
     pub(crate) fn open_keymap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::keymap_editor::{KeymapEditor, KeymapEditorEvent};
-        let keymap = cx.try_global::<crate::actions::CurrentKeymap>().map(|k| k.0.clone()).unwrap_or_default();
+        let keymap = cx
+            .try_global::<crate::actions::CurrentKeymap>()
+            .map(|k| k.0.clone())
+            .unwrap_or_default();
         let editor = cx.new(|cx| KeymapEditor::new(keymap, cx));
-        self.keymap_sub = Some(cx.subscribe_in(&editor, window, |this, _, event: &KeymapEditorEvent, window, cx| match event {
-            KeymapEditorEvent::Changed(keymap) => {
-                crate::actions::apply_keymap(cx, keymap.clone());
-                if let Err(e) = keymap.save() {
-                    this.notify_user(format!("Could not save the shortcuts: {e:#}"), true, window, cx);
-                }
-                cx.notify();
-            }
-            KeymapEditorEvent::Close => this.close_keymap(window, cx),
-        }));
+        self.keymap_sub =
+            Some(cx.subscribe_in(
+                &editor,
+                window,
+                |this, _, event: &KeymapEditorEvent, window, cx| match event {
+                    KeymapEditorEvent::Changed(keymap) => {
+                        crate::actions::apply_keymap(cx, keymap.clone());
+                        if let Err(e) = keymap.save() {
+                            this.notify_user(format!("Could not save the shortcuts: {e:#}"), true, window, cx);
+                        }
+                        cx.notify();
+                    }
+                    KeymapEditorEvent::Close => this.close_keymap(window, cx),
+                },
+            ));
         let focus = editor.read(cx).focus.clone();
         window.focus(&focus, cx);
         self.keymap_editor = Some(editor);
@@ -1626,7 +1843,12 @@ impl Workspace {
                 .iter()
                 .map(|t| {
                     let t = t.read(cx);
-                    Doomed { id: t.id(), label: t.label(), cwd: t.cwd().cloned(), processes: t.running_processes() }
+                    Doomed {
+                        id: t.id(),
+                        label: t.label(),
+                        cwd: t.cwd().cloned(),
+                        processes: t.running_processes(),
+                    }
                 })
                 .collect();
             self.pending_shrink = Some(PendingShrink { config, doomed });
@@ -1666,7 +1888,9 @@ impl Workspace {
     /// Confirms the pending grid reduction: closes the terminals beyond the
     /// new capacity (their processes die with them) and applies it.
     pub(crate) fn confirm_shrink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_shrink.take() else { return };
+        let Some(pending) = self.pending_shrink.take() else {
+            return;
+        };
         let capacity = GridSpec::new(pending.config.grid.max_cols, pending.config.grid.max_rows).capacity();
         while self.terminals.len() > capacity {
             self.close_terminal_at(self.terminals.len() - 1, window, cx);
@@ -1690,7 +1914,12 @@ impl Workspace {
 
     fn render_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let right = self.sidebar_right();
-        let item = |id: &'static str, icon: IconName, panel: Panel, label: &'static str, command: &'static str, cx: &mut Context<Self>| {
+        let item = |id: &'static str,
+                    icon: IconName,
+                    panel: Panel,
+                    label: &'static str,
+                    command: &'static str,
+                    cx: &mut Context<Self>| {
             let active = self.sidebar_visible && self.panel == panel;
             div()
                 .id(id)
@@ -1704,10 +1933,18 @@ impl Workspace {
                 .hover(|s| s.text_color(rgb(theme::text())))
                 .when(active, |el| {
                     // On the edge away from the sidebar.
-                    let bar = div().absolute().top(px(10.)).w(px(2.)).h(px(24.)).bg(rgb(theme::accent()));
+                    let bar = div()
+                        .absolute()
+                        .top(px(10.))
+                        .w(px(2.))
+                        .h(px(24.))
+                        .bg(rgb(theme::accent()));
                     el.child(if right { bar.right_0() } else { bar.left_0() })
                 })
-                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint(label, command, cx)).build(window, cx))
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint(label, command, cx))
+                        .build(window, cx)
+                })
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.show_panel(panel, window, cx)))
                 .child(Icon::new(icon).size(px(18.)))
         };
@@ -1721,8 +1958,22 @@ impl Workspace {
             .map(|el| if right { el.border_l_1() } else { el.border_r_1() })
             .border_color(rgb(theme::surface0()))
             .child(item("act-git", IconName::GitBranch, Panel::Git, "Git", "show_git", cx))
-            .child(item("act-files", IconName::FolderTree, Panel::Explorer, "Explorer", "show_explorer", cx))
-            .child(item("act-search", IconName::FileSearch, Panel::Search, "Find file", "show_search", cx))
+            .child(item(
+                "act-files",
+                IconName::FolderTree,
+                Panel::Explorer,
+                "Explorer",
+                "show_explorer",
+                cx,
+            ))
+            .child(item(
+                "act-search",
+                IconName::FileSearch,
+                Panel::Search,
+                "Find file",
+                "show_search",
+                cx,
+            ))
             .child(div().flex_1())
             .child(
                 div()
@@ -1734,11 +1985,25 @@ impl Workspace {
                     .cursor_pointer()
                     .text_color(rgb(theme::overlay0()))
                     .hover(|s| s.text_color(rgb(theme::text())))
-                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint("New terminal", "new_terminal", cx)).build(window, cx))
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint(
+                            "New terminal",
+                            "new_terminal",
+                            cx,
+                        ))
+                        .build(window, cx)
+                    })
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.request_terminal(window, cx)))
                     .child(Icon::new(IconName::SquareTerminal).size(px(18.))),
             )
-            .child(item("act-settings", IconName::Settings, Panel::Settings, "Settings", "show_settings", cx))
+            .child(item(
+                "act-settings",
+                IconName::Settings,
+                Panel::Settings,
+                "Settings",
+                "show_settings",
+                cx,
+            ))
     }
 
     fn render_context_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1760,7 +2025,11 @@ impl Workspace {
             .border_b_1()
             .border_color(rgb(theme::surface0()))
             .text_xs()
-            .child(Icon::new(IconName::MapPin).size(px(13.)).text_color(rgb(if ctx.pinned { theme::peach() } else { theme::accent() })))
+            .child(Icon::new(IconName::MapPin).size(px(13.)).text_color(rgb(if ctx.pinned {
+                theme::peach()
+            } else {
+                theme::accent()
+            })))
             .child(
                 div()
                     .flex_1()
@@ -1772,7 +2041,9 @@ impl Workspace {
                     .font_weight(FontWeight::MEDIUM)
                     .child(location),
             )
-            .when_some(terminal_label, |el, l| el.child(div().text_color(rgb(theme::overlay0())).child(l)))
+            .when_some(terminal_label, |el, l| {
+                el.child(div().text_color(rgb(theme::overlay0())).child(l))
+            })
             .when_some(branch, |el, b| {
                 // A long branch is cut with "…" (full name in the tooltip) and
                 // leaves room for the location and the pin button.
@@ -1791,7 +2062,14 @@ impl Workspace {
                         .bg(rgb(theme::surface0()))
                         .text_color(rgb(theme::green()))
                         .child(Icon::new(IconName::GitBranch).size(px(11.)).flex_none())
-                        .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(b))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(b),
+                        )
                         .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(w, cx)),
                 )
             })
@@ -1833,12 +2111,20 @@ impl Workspace {
             .w(self.sidebar_width)
             .h_full()
             .bg(rgb(theme::mantle()))
-            .map(|el| if self.sidebar_right() { el.border_l_1() } else { el.border_r_1() })
+            .map(|el| {
+                if self.sidebar_right() {
+                    el.border_l_1()
+                } else {
+                    el.border_r_1()
+                }
+            })
             .border_color(rgb(theme::surface0()))
             .text_color(rgb(theme::text()))
             .on_action(cx.listener(Self::focus_active_terminal))
             .relative()
-            .when(self.panel != Panel::Settings, |el| el.child(self.render_context_header(cx)))
+            .when(self.panel != Panel::Settings, |el| {
+                el.child(self.render_context_header(cx))
+            })
             .child(div().flex_1().min_h_0().flex().flex_col().child(body))
             .child(
                 div()
@@ -1847,16 +2133,27 @@ impl Workspace {
                     .top_0()
                     .bottom_0()
                     // On the edge facing the grid.
-                    .map(|el| if self.sidebar_right() { el.left(px(-3.)) } else { el.right(px(-3.)) })
+                    .map(|el| {
+                        if self.sidebar_right() {
+                            el.left(px(-3.))
+                        } else {
+                            el.right(px(-3.))
+                        }
+                    })
                     .w(px(6.))
                     .cursor(CursorStyle::ResizeLeftRight)
                     .hover(|s| s.bg(rgba(theme::accent_alpha(0x55))))
-                    .when(self.resizing_sidebar.is_some(), |el| el.bg(rgba(theme::accent_alpha(0x88))))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                        this.resizing_sidebar = Some((f32::from(e.position.x), this.sidebar_width));
-                        cx.stop_propagation();
-                        cx.notify();
-                    })),
+                    .when(self.resizing_sidebar.is_some(), |el| {
+                        el.bg(rgba(theme::accent_alpha(0x88)))
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.resizing_sidebar = Some((f32::from(e.position.x), this.sidebar_width));
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
             )
             .focus_trap("sidebar-trap", &self.sidebar_focus)
     }
@@ -1895,7 +2192,13 @@ impl Workspace {
         };
         if self.zoomed {
             if let Some(view) = self.active_cell() {
-                return div().flex().flex_1().min_w_0().p_1().child(cell(view, false)).into_any_element();
+                return div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .p_1()
+                    .child(cell(view, false))
+                    .into_any_element();
             }
         }
         let layout = slots(n, self.grid_spec());
@@ -1914,7 +2217,11 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .p_1()
-            .child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().inset_0());
+            .child(
+                canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            );
         let n_rows = layout.len();
         for (r, row) in layout.into_iter().enumerate() {
             let n_cols = row.len();
@@ -1933,7 +2240,10 @@ impl Workspace {
                 } else {
                     let doomed = doomed_from.is_some_and(|from| i >= from);
                     row_el = row_el.child(
-                        cell(&self.cells[i], doomed).id(("grid-cell", i)).flex_basis(px(0.)).map(grow),
+                        cell(&self.cells[i], doomed)
+                            .id(("grid-cell", i))
+                            .flex_basis(px(0.))
+                            .map(grow),
                     );
                 }
                 if c + 1 < n_cols {
@@ -1970,11 +2280,18 @@ impl Workspace {
             .text_color(rgb(theme::overlay0()))
             .cursor_pointer()
             .hover(|s| s.border_color(rgb(theme::accent())).text_color(rgb(theme::accent())))
-            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint("New terminal…", "new_terminal", cx)).build(window, cx))
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(crate::actions::hint("New terminal…", "new_terminal", cx))
+                    .build(window, cx)
+            })
             // Keep focus where it is (the workspace root would take it).
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.request_terminal(window, cx)))
-            .child(canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
+            .child(
+                canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            )
             .child(Icon::new(IconName::Plus).size(px(28.)))
             .when(waiting, |d| d.child(div().text_xs().child("Choose a folder…")))
     }
@@ -2035,7 +2352,12 @@ impl Workspace {
                     .border_color(rgb(theme::surface1()))
                     .bg(rgb(theme::mantle()))
                     .shadow_lg()
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(format!("Shrink grid to {cols}×{rows}?")))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("Shrink grid to {cols}×{rows}?")),
+                    )
                     .child(div().text_xs().text_color(rgb(theme::subtext())).child(if n == 1 {
                         "1 terminal is in a cell that disappears and will close:".to_string()
                     } else {
@@ -2056,7 +2378,12 @@ impl Workspace {
                                     .flex()
                                     .flex_row()
                                     .gap_2()
-                                    .child(div().font_family("Menlo").text_color(rgb(theme::overlay0())).child(d.id.to_string()))
+                                    .child(
+                                        div()
+                                            .font_family("Menlo")
+                                            .text_color(rgb(theme::overlay0()))
+                                            .child(d.id.to_string()),
+                                    )
                                     .child(div().child(d.label.clone()))
                                     .child(
                                         div()
@@ -2097,14 +2424,18 @@ impl Workspace {
                             })
                             .child({
                                 let buttons = buttons.clone();
-                                button("shrink-confirm", if n == 1 { "Close terminal" } else { "Close terminals" }, true)
-                                    .child(
-                                        canvas(move |b, _, _| buttons.set((buttons.get().0, b)), |_, _, _, _| {})
-                                            .absolute()
-                                            .inset_0(),
-                                    )
-                                    .relative()
-                                    .on_click(cx.listener(|this, _: &ClickEvent, w, cx| this.confirm_shrink(w, cx)))
+                                button(
+                                    "shrink-confirm",
+                                    if n == 1 { "Close terminal" } else { "Close terminals" },
+                                    true,
+                                )
+                                .child(
+                                    canvas(move |b, _, _| buttons.set((buttons.get().0, b)), |_, _, _, _| {})
+                                        .absolute()
+                                        .inset_0(),
+                                )
+                                .relative()
+                                .on_click(cx.listener(|this, _: &ClickEvent, w, cx| this.confirm_shrink(w, cx)))
                             }),
                     ),
             )
@@ -2121,26 +2452,36 @@ impl Workspace {
         div()
             .id(id)
             .flex_none()
-            .when(vertical, |d| d.w(px(SEPARATOR)).h_full().cursor(CursorStyle::ResizeLeftRight))
-            .when(!vertical, |d| d.h(px(SEPARATOR)).w_full().cursor(CursorStyle::ResizeUpDown))
-            
+            .when(vertical, |d| {
+                d.w(px(SEPARATOR)).h_full().cursor(CursorStyle::ResizeLeftRight)
+            })
+            .when(!vertical, |d| {
+                d.h(px(SEPARATOR)).w_full().cursor(CursorStyle::ResizeUpDown)
+            })
             .hover(|s| s.bg(rgba(theme::accent_alpha(0x55))))
             .when(active, |d| d.bg(rgba(theme::accent_alpha(0x88))))
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                if e.click_count >= 2 {
-                    // Double click: back to equal sizes.
-                    match row {
-                        Some(r) => layout::reset_weights(&mut this.weights.cols[r]),
-                        None => layout::reset_weights(&mut this.weights.rows),
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if e.click_count >= 2 {
+                        // Double click: back to equal sizes.
+                        match row {
+                            Some(r) => layout::reset_weights(&mut this.weights.cols[r]),
+                            None => layout::reset_weights(&mut this.weights.rows),
+                        }
+                        this.grid_drag = None;
+                    } else {
+                        let pos = if row.is_some() { e.position.x } else { e.position.y };
+                        this.grid_drag = Some(GridDrag {
+                            row,
+                            boundary,
+                            last: f32::from(pos),
+                        });
                     }
-                    this.grid_drag = None;
-                } else {
-                    let pos = if row.is_some() { e.position.x } else { e.position.y };
-                    this.grid_drag = Some(GridDrag { row, boundary, last: f32::from(pos) });
-                }
-                cx.notify();
-            }))
+                    cx.notify();
+                }),
+            )
     }
 
     fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -2169,8 +2510,16 @@ impl Workspace {
         let Some(mut drag) = self.grid_drag else { return };
         let bounds = self.grid_bounds.get();
         let (pos, total, count) = match drag.row {
-            Some(r) => (f32::from(position.x), f32::from(bounds.size.width), self.weights.cols.get(r).map_or(0, Vec::len)),
-            None => (f32::from(position.y), f32::from(bounds.size.height), self.weights.rows.len()),
+            Some(r) => (
+                f32::from(position.x),
+                f32::from(bounds.size.width),
+                self.weights.cols.get(r).map_or(0, Vec::len),
+            ),
+            None => (
+                f32::from(position.y),
+                f32::from(bounds.size.height),
+                self.weights.rows.len(),
+            ),
         };
         // Usable length: minus padding (2 × 4 px) and the separators.
         let usable = total - 8.0 - SEPARATOR * count.saturating_sub(1) as f32;
@@ -2203,8 +2552,15 @@ impl Workspace {
             .border_color(rgb(theme::surface0()))
             .text_xs()
             .text_color(rgb(theme::overlay0()))
-            .child(format!("{n}/{} terminals · grid {}×{}", spec.capacity(), spec.max_cols, spec.max_rows))
-            .when(self.zoomed, |el| el.child(div().text_color(rgb(theme::peach())).child("zoomed")))
+            .child(format!(
+                "{n}/{} terminals · grid {}×{}",
+                spec.capacity(),
+                spec.max_cols,
+                spec.max_rows
+            ))
+            .when(self.zoomed, |el| {
+                el.child(div().text_color(rgb(theme::peach())).child("zoomed"))
+            })
             .child(div().flex_1())
             .when_some(process, |el, p| el.child(p))
             .when_some(cwd, |el, c| el.child(c))
@@ -2261,23 +2617,16 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ShowSearch, w, cx| this.toggle_palette(w, cx)))
             .on_action(cx.listener(|this, _: &ShowSettings, w, cx| this.show_panel(Panel::Settings, w, cx)))
             .on_action(cx.listener(Self::show_content_search))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h_0()
-                    .map(|el| {
-                        let bar = self.render_activity_bar(cx).into_any_element();
-                        let sidebar = self.sidebar_visible.then(|| self.render_sidebar(cx).into_any_element());
-                        let grid = self.render_grid(cx);
-                        if self.sidebar_right() {
-                            el.child(grid).children(sidebar).child(bar)
-                        } else {
-                            el.child(bar).children(sidebar).child(grid)
-                        }
-                    }),
-            )
+            .child(div().flex().flex_row().flex_1().min_h_0().map(|el| {
+                let bar = self.render_activity_bar(cx).into_any_element();
+                let sidebar = self.sidebar_visible.then(|| self.render_sidebar(cx).into_any_element());
+                let grid = self.render_grid(cx);
+                if self.sidebar_right() {
+                    el.child(grid).children(sidebar).child(bar)
+                } else {
+                    el.child(bar).children(sidebar).child(grid)
+                }
+            }))
             .child(self.render_status_bar(cx))
             // Separator/sidebar drags follow the pointer at window level:
             // element listeners stop when it leaves the element (or the
@@ -2314,7 +2663,9 @@ impl Render for Workspace {
             .relative()
             .when(self.palette_open, |el| el.child(self.render_palette(cx)))
             .when(self.history_open, |el| el.child(self.render_history_window(cx)))
-            .when_some(self.pending_shrink.clone(), |el, p| el.child(self.render_shrink_dialog(&p, cx)))
+            .when_some(self.pending_shrink.clone(), |el, p| {
+                el.child(self.render_shrink_dialog(&p, cx))
+            })
             .when_some(self.keymap_editor.clone(), |el, editor| el.child(editor))
             .child(self.render_toasts(cx))
     }
@@ -2330,7 +2681,11 @@ pub fn apply_theme(mode: config::ThemeMode, window: &mut Window, cx: &mut App) {
     theme::set_light(light);
     terminal::colors::set_light(light);
     gpui_kit::component::Theme::change(
-        if light { gpui_kit::component::ThemeMode::Light } else { gpui_kit::component::ThemeMode::Dark },
+        if light {
+            gpui_kit::component::ThemeMode::Light
+        } else {
+            gpui_kit::component::ThemeMode::Dark
+        },
         Some(window),
         cx,
     );
@@ -2374,12 +2729,18 @@ pub(crate) struct CellPosition {
 
 /// `get_selection` result: 1-based, inclusive lines for the model.
 fn selection_json(sel: &agents::ide::Selection) -> serde_json::Value {
-    let Some(file) = &sel.file_path else { return serde_json::json!({ "file": null }) };
+    let Some(file) = &sel.file_path else {
+        return serde_json::json!({ "file": null });
+    };
     if sel.text.is_empty() {
         return serde_json::json!({ "file": file, "cursor_line": sel.start.0 + 1 });
     }
     // A selection ending at the start of a line does not include that line.
-    let end = if sel.end.1 == 0 && sel.end.0 > sel.start.0 { sel.end.0 - 1 } else { sel.end.0 };
+    let end = if sel.end.1 == 0 && sel.end.0 > sel.start.0 {
+        sel.end.0 - 1
+    } else {
+        sel.end.0
+    };
     serde_json::json!({ "file": file, "start_line": sel.start.0 + 1, "end_line": end + 1, "text": sel.text })
 }
 
@@ -2392,7 +2753,9 @@ pub fn find_repo_root(dir: &std::path::Path) -> Option<PathBuf> {
 
 /// Single-quotes a path for POSIX shells when it contains special characters.
 pub fn shell_quote(s: &str) -> String {
-    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+~:@%,=".contains(c));
+    let safe = s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+~:@%,=".contains(c));
     if safe && !s.is_empty() {
         s.to_string()
     } else {
