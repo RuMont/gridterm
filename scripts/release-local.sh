@@ -24,7 +24,7 @@
 #       notes       release.yml  scripts/release-notes.sh <tag> <commit>  (printed, saved as release-notes.md)
 #       fmt         local only   cargo fmt --all --check                (warn)
 #       deny        local only   cargo deny check                       (warn)
-#       branch      local only   git-flow: release/*, hotfix/* or master (warn)
+#       branch      local only   git-flow: on release/* or hotfix/*, or a commit on master (warn)
 #       clippy      ci.yml       cargo clippy --workspace --all-targets -- -D warnings
 #       clippy-e2e  ci.yml       cargo clippy -p gridterm --all-targets --features e2e -- -D warnings
 #       test        ci.yml       cargo test --workspace --no-fail-fast
@@ -186,9 +186,13 @@ check_branch() {
   where="$(git branch --contains "$SHA" --format='%(refname:short)' | tr '\n' ' ')"
   echo "branches containing $SHORT: ${where:-none}"
   echo "current branch: $BRANCH"
+  if git merge-base --is-ancestor "$SHA" master 2>/dev/null; then
+    echo "ok: $SHORT is on master"
+    return 0
+  fi
   case $BRANCH in
-    release/* | hotfix/* | master) echo "ok: releases are cut from $BRANCH" ;;
-    *) echo "git-flow: releases come from release/X.Y.Z, hotfix/X.Y.Z or a tag on master, not '$BRANCH'"; return 1 ;;
+    release/* | hotfix/*) echo "ok: releases are cut from $BRANCH" ;;
+    *) echo "git-flow: release from release/X.Y.Z or hotfix/X.Y.Z, or test a commit on master; $SHORT is on neither ('$BRANCH')"; return 1 ;;
   esac
 }
 
